@@ -1,0 +1,22 @@
+# General Settings
+name = "sentinel"
+log_level = "INFO"
+
+# Collectors Configuration
+[collectors]
+enabled = ["web3_transaction"]
+
+[collectors.web3_transaction]
+rpc_url = "https://eth.llamarpc.com"
+
+# Strategies Configuration
+[strategies]
+enabled = ["dummy"]
+
+[executors]
+enabled = ["logger", "wxpusher"]
+
+[executors.wxpusher]
+app_token = "your_app_token"
+uids = ["your_uid"]
+default_summary = "Sentinel Alert"
