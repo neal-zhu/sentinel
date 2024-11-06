@@ -50,7 +50,6 @@ class SentinelBuilder:
         if not isinstance(executors, list):
             raise ValueError("enabled_executors must be a list")
 
-        logger.info(f"Building executors: {executors}")       
         for name in executors:
             executor = Executor.create(
                 name,
@@ -61,7 +60,7 @@ class SentinelBuilder:
         return self
     
     def build(self) -> Sentinel:
-        """构建最终的Artemis实例"""
+        """构建最终的 Sentinel 实例"""
         # 添加所有组件
         for collector in self.collectors:
             self.artemis.add_collector(collector)

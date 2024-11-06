@@ -2,7 +2,7 @@ from telegram import Bot
 from telegram.error import TelegramError
 
 from ..core.base import Executor
-from ..core.events import Action
+from ..core.actions import Action
 from ..logger import logger
 
 class TelegramExecutor(Executor):
@@ -55,4 +55,4 @@ class TelegramExecutor(Executor):
             str: 格式化后的消息
         """
         # 这里可以根据实际需求自定义消息格式
-        return f"<b>New Action</b>\n\n{action.model_dump_json()}"
+        return f"<b>New Action</b>\n\n{str(action)}"

@@ -1,30 +1,13 @@
 from typing import List, Optional, Callable, Any, AsyncGenerator
 from web3 import AsyncWeb3, AsyncHTTPProvider
-from web3.types import BlockData, TxData
+from web3.types import BlockData
 import asyncio
 from datetime import datetime
 
+from ..core.events import TransactionEvent
+
 from ..core.base import Collector
-from ..core.events import Event
 from ..logger import logger
-
-class TransactionEvent(Event):
-    """交易事件"""
-    def __init__(self, transaction: TxData, block: BlockData):
-        self.type = "transaction"
-        self.transaction = transaction
-        self.block = block
-        self.timestamp = datetime.fromtimestamp(block.timestamp)
-
-    def __str__(self) -> str:
-        return (
-            f"Transaction: {self.transaction.hash.hex()}\n"
-            f"Block: {self.block.number}\n"
-            f"From: {self.transaction['from']}\n"
-            f"To: {self.transaction['to']}\n"
-            f"Value: {self.transaction['value']}\n"
-            f"Timestamp: {self.timestamp}"
-        )
 
 class TransactionCollector(Collector):
     __component_name__ = "web3_transaction"

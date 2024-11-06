@@ -1,5 +1,4 @@
 
+from .gas_tracker import GasTracker
 
-from .dummy import DummyStrategy
-
-__all__ = ["DummyStrategy"]
+__all__ = ["GasTracker"]

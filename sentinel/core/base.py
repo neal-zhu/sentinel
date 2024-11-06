@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Type, TypeVar, Optional, ClassVar, Callable, AsyncIterable, Awaitable, List
-from ..core.events import Event, Action
+
+from .actions import Action
+from ..core.events import Event
 
 from sentinel.core.events import Event
 

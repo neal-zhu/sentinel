@@ -1,5 +1,5 @@
 from ..core.base import Executor
-from ..core.events import Action
+from ..core.actions import Action
 from ..logger import logger
 
 

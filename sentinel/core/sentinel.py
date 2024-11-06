@@ -1,10 +1,12 @@
 import asyncio
 from typing import List, Union, Callable, AsyncIterable, Awaitable, Optional
+
+from .actions import Action
 from .base import (
     Collector, Strategy, Executor,
     FunctionCollector, FunctionStrategy, FunctionExecutor
 )
-from .events import Event, Action
+from .events import Event
 
 
 class Sentinel:

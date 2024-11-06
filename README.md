@@ -35,10 +35,10 @@ vim config.toml
 
 ```bash
 # 使用默认配置文件 config.toml
-python -m sentinel
+python -m main
 
 # 或指定配置文件路径
-python -m sentinel --config path/to/config.toml
+python -m main -config path/to/config.toml
 ```
 
 这样运行后，Sentinel 会自动加载配置文件并启动监控。您可以通过 Ctrl+C 来优雅地停止程序。

@@ -2,7 +2,7 @@ from typing import Optional, List, Union
 from wxpusher import WxPusher
 
 from ..core.base import Executor
-from ..core.events import Action
+from ..core.actions import Action
 from ..logger import logger
 
 class WxPusherExecutor(Executor):
@@ -68,4 +68,4 @@ class WxPusherExecutor(Executor):
         Returns:
             str: 格式化后的消息
         """
-        return action.model_dump_json()
+        return str(action)
