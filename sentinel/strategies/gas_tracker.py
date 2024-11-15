@@ -14,30 +14,20 @@ from aioetherscan import Client
 class GasTracker(Strategy):
     __component_name__ = "gas_tracker"
 
-    def __init__(self, report_interval: int = 300, etherscan_api_key: str = None):
+    def __init__(self, windows: Dict[str, int] = None):
+        """
+        初始化Gas跟踪器
+        
+        Args:
+            windows: 时间窗口配置，如 {"1h": 3600, "24h": 86400}
+        """
         super().__init__()
-        # 存储不同时间窗口的数据
-        self.windows = {
-            '1h': 3600,
-            '30min': 1800,
-            '15min': 900,
-            '5min': 300
-        }
-        # 每个时间窗口的合约 gas 使用数据
-        self.gas_usage = {
-            window: defaultdict(list) for window in self.windows
-        }
-        # 上次报告时间
+        self.windows = windows or {"1h": 3600, "30min": 1800, "15min": 900, "5min": 300}
+        self.gas_usage = defaultdict(lambda: defaultdict(list))  # window -> contract -> [(timestamp, gas)]
         self.last_report_time = datetime.now()
-        # 报告间隔（5分钟）
-        self.report_interval = report_interval
-        # 合约名称缓存
-        self.contract_names = {}
-        # Etherscan client
-        if etherscan_api_key:
-            self.etherscan = Client(api_key=etherscan_api_key)
-        else:
-            self.etherscan = None
+        self.report_interval = 300  # 5分钟生成一次报告
+        self.contract_names = {}  # 缓存合约名称
+        self.etherscan = None  # Etherscan客户端
 
     async def _get_contract_name(self, address: str) -> str:
         """获取合约名称，带缓存"""
@@ -49,10 +39,9 @@ class GasTracker(Strategy):
         
         try:
             # 尝试获取合约信息
-            # Get contract info and check if it's a proxy
             contract_info = await self.etherscan.contract.contract_source_code(address)
             if contract_info and contract_info[0].get('Implementation'):
-                # If it's a proxy, get the implementation contract info
+                # 如果是代理合约，获取实现合约信息
                 impl_address = contract_info[0]['Implementation']
                 impl_info = await self.etherscan.contract.contract_source_code(impl_address)
                 if impl_info and impl_info[0].get('ContractName'):
@@ -61,12 +50,12 @@ class GasTracker(Strategy):
             self.contract_names[address] = name
             return name
         except Exception as e:
-            # 如果API调用失败，返回地址的简短形式
             logger.error(f"Failed to get contract name for {address}: {e}")
             self.contract_names[address] = address[:8] + '...'
             return self.contract_names[address]
 
     async def process_event(self, event: Event) -> List[Action]:
+        """处理交易事件"""
         if not isinstance(event, TransactionEvent):
             return []
 
@@ -74,7 +63,7 @@ class GasTracker(Strategy):
         actions = []
 
         # 更新 gas 使用数据
-        self._update_gas_usage(event, current_time)
+        self._update_gas_usage(event.tx_data, current_time)
 
         # 检查是否需要生成报告
         if (current_time - self.last_report_time).total_seconds() >= self.report_interval:
@@ -87,9 +76,10 @@ class GasTracker(Strategy):
 
         return actions
 
-    def _update_gas_usage(self, event: TransactionEvent, current_time: datetime):
-        gas_used = event.transaction.gas
-        contract_address = event.transaction.to
+    def _update_gas_usage(self, tx_data: Dict, current_time: datetime):
+        """更新gas使用数据"""
+        gas_used = tx_data.get('gas', 0)
+        contract_address = tx_data.get('to')
         
         if not contract_address or not gas_used:
             return

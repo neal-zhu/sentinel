@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Type, TypeVar, Optional, ClassVar, Callable, AsyncIterable, Awaitable, List
+import asyncio
 
 from .actions import Action
-from ..core.events import Event
-
-from sentinel.core.events import Event
+from .events import Event
+from ..logger import logger
 
 T = TypeVar('T', bound='Component')
 
@@ -21,12 +21,10 @@ class Component(ABC):
         """
         super().__init_subclass__(**kwargs)
         
-        # 获取组件名称
         component_name = getattr(cls, '__component_name__', None)
-        
         if component_name:
             # 找到最近的带有 _registry 的基类
-            for base in cls.__mro__[1:]:  # 跳过自身
+            for base in cls.__mro__[1:]:
                 if hasattr(base, '_registry'):
                     base._registry[component_name] = cls
                     cls._component_name = component_name
@@ -34,13 +32,28 @@ class Component(ABC):
     
     @classmethod
     def create(cls: Type[T], name: str, **kwargs) -> T:
+        """
+        创建组件实例
+        
+        Args:
+            name: 组件名称
+            **kwargs: 组件初始化参数
+            
+        Returns:
+            Component: 组件实例
+            
+        Raises:
+            ValueError: 组件未注册
+        """
         if name not in cls._registry:
             raise ValueError(f"No {cls.__name__} registered with name: {name}")
-            
-        # 获取组件类
-        component_class = cls._registry[name]
         
-        return component_class(**kwargs)
+        try:
+            component_class = cls._registry[name]
+            return component_class(**kwargs)
+        except Exception as e:
+            logger.error(f"Error creating component {name}: {e}")
+            raise
     
     @classmethod
     @abstractmethod
@@ -67,17 +80,29 @@ class Collector(Component):
         """启动收集器"""
         if self._started:
             return
-        self._started = True
-        self._running = True
-        await self._start()
+        try:
+            self._started = True
+            self._running = True
+            await self._start()
+            logger.info(f"Collector {self.name} started")
+        except Exception as e:
+            self._started = False
+            self._running = False
+            logger.error(f"Error starting collector {self.name}: {e}")
+            raise
     
     async def stop(self):
         """停止收集器"""
         if not self._started:
             return
-        self._running = False
-        await self._stop()
-        self._started = False
+        try:
+            self._running = False
+            await self._stop()
+            self._started = False
+            logger.info(f"Collector {self.name} stopped")
+        except Exception as e:
+            logger.error(f"Error stopping collector {self.name}: {e}")
+            raise
     
     async def _start(self):
         """子类可以重写此方法以实现自定义启动逻辑"""
@@ -136,6 +161,9 @@ class FunctionCollector(Collector):
                 if not self._running:
                     break
                 yield event
+        except Exception as e:
+            logger.error(f"Error in function collector {self.name}: {e}")
+            raise
         finally:
             if self._running:
                 await self.stop()
@@ -148,7 +176,11 @@ class FunctionStrategy(Strategy):
         self._component_name = name or func.__name__
     
     async def process_event(self, event: Event) -> List[Action]:
-        return await self._func(event)
+        try:
+            return await self._func(event)
+        except Exception as e:
+            logger.error(f"Error in function strategy {self.name}: {e}")
+            return []
 
 class FunctionExecutor(Executor):
     """函数执行器包装器"""
@@ -158,23 +190,7 @@ class FunctionExecutor(Executor):
         self._component_name = name or func.__name__
     
     async def execute(self, action: Action) -> None:
-        await self._func(action)
-
-# 装饰器
-def function_collector(name: Optional[str] = None):
-    """装饰器：将异步生成器函数转换为收集器"""
-    def wrapper(func: Callable[[], AsyncIterable[Event]]) -> FunctionCollector:
-        return FunctionCollector(func, name)
-    return wrapper
-
-def function_strategy(name: Optional[str] = None):
-    """装饰器：将异步函数转换为策略"""
-    def wrapper(func: Callable[[Event], Awaitable[List[Action]]]) -> FunctionStrategy:
-        return FunctionStrategy(func, name)
-    return wrapper
-
-def function_executor(name: Optional[str] = None):
-    """装饰器：将异步函数转换为执行器"""
-    def wrapper(func: Callable[[Action], Awaitable[None]]) -> FunctionExecutor:
-        return FunctionExecutor(func, name)
-    return wrapper
+        try:
+            await self._func(action)
+        except Exception as e:
+            logger.error(f"Error in function executor {self.name}: {e}")

@@ -1,5 +1,6 @@
 import asyncio
 from typing import List, Union, Callable, AsyncIterable, Awaitable, Optional
+from contextlib import AsyncExitStack
 
 from .actions import Action
 from .base import (
@@ -7,17 +8,19 @@ from .base import (
     FunctionCollector, FunctionStrategy, FunctionExecutor
 )
 from .events import Event
+from ..logger import logger
 
 
 class Sentinel:
-    def __init__(self):
+    def __init__(self, queue_size: int = 1000):
         self.collectors: List[Collector] = []
         self.strategies: List[Strategy] = []
         self.executors: List[Executor] = []
         self.running = False
-        self.collector_queue = asyncio.Queue()
-        self.executor_queue = asyncio.Queue()
+        self.collector_queue = asyncio.Queue(maxsize=queue_size)
+        self.executor_queue = asyncio.Queue(maxsize=queue_size)
         self._tasks: Optional[List[asyncio.Task]] = None
+        self._exit_stack = AsyncExitStack()
 
     def add_collector(
         self, 
@@ -48,51 +51,104 @@ class Sentinel:
 
     async def start(self):
         self.running = True
-        start_tasks = [collector.start() for collector in self.collectors]
-        await asyncio.gather(*start_tasks)
         
-        # Create and store all tasks
-        self._tasks = [
-            asyncio.create_task(self._run_collector(collector)) 
-            for collector in self.collectors
-        ] + [
-            asyncio.create_task(self._run_strategies()),
-            asyncio.create_task(self._run_executors())
-        ]
+        try:
+            start_tasks = [collector.start() for collector in self.collectors]
+            await asyncio.gather(*start_tasks)
+            
+            self._tasks = [
+                asyncio.create_task(self._run_collector(collector), name=f"collector_{i}") 
+                for i, collector in enumerate(self.collectors)
+            ]
+            self._tasks.extend([
+                asyncio.create_task(self._run_strategies(), name="strategies"),
+                asyncio.create_task(self._run_executors(), name="executors")
+            ])
+            
+            logger.info("All components started successfully")
+            
+        except Exception as e:
+            logger.error(f"Error starting components: {e}")
+            await self.stop()
+            raise
 
     async def stop(self):
         self.running = False
-        stop_tasks = [collector.stop() for collector in self.collectors]
-        await asyncio.gather(*stop_tasks)
         
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-            self._tasks = None
+        try:
+            if self.collectors:
+                stop_tasks = [collector.stop() for collector in self.collectors]
+                await asyncio.gather(*stop_tasks, return_exceptions=True)
+            
+            if self.collector_queue:
+                await self.collector_queue.join()
+            if self.executor_queue:
+                await self.executor_queue.join()
+            
+            if self._tasks:
+                for task in self._tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+                self._tasks = None
+                
+            logger.info("All components stopped successfully")
+            
+        except Exception as e:
+            logger.error(f"Error stopping components: {e}")
+            raise
 
     async def join(self):
-        """Wait for all tasks to complete."""
         if self._tasks:
             await asyncio.gather(*self._tasks)
 
     async def _run_collector(self, collector: Collector):
+        """运行单个收集器"""
         while self.running:
-            async for event in collector.events():
-                if not self.running:
-                    break
-                await self.collector_queue.put(event)
+            try:
+                async for event in collector.events():
+                    if not self.running:
+                        break
+                    try:
+                        await self.collector_queue.put(event)
+                    except asyncio.QueueFull:
+                        logger.warning("Collector queue is full, dropping event")
+                # 如果 events() 迭代结束，但程序还在运行，我们应该记录这个情况
+                if self.running:
+                    logger.warning(f"Collector {collector.name} events stream ended, restarting...")
+            except Exception as e:
+                logger.error(f"Error in collector {collector.name}: {e}")
+                if self.running:
+                    logger.info(f"Waiting before retrying collector {collector.name}...")
+                    await asyncio.sleep(5)  # 添加重试延迟
 
     async def _run_strategies(self):
         while self.running:
-            event = await self.collector_queue.get()
-            for strategy in self.strategies:
-                actions = await strategy.process_event(event)
-                for action in actions:
-                    await self.executor_queue.put(action)
-            self.collector_queue.task_done()
+            try:
+                event = await self.collector_queue.get()
+                try:
+                    for strategy in self.strategies:
+                        actions = await strategy.process_event(event)
+                        for action in actions:
+                            try:
+                                await self.executor_queue.put(action)
+                            except asyncio.QueueFull:
+                                logger.warning("Executor queue is full, dropping action")
+                finally:
+                    self.collector_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error processing event: {e}", exc_info=True)
 
     async def _run_executors(self):
         while self.running:
-            action = await self.executor_queue.get()
-            for executor in self.executors:
-                await executor.execute(action)
-            self.executor_queue.task_done()
+            try:
+                action = await self.executor_queue.get()
+                try:
+                    await asyncio.gather(
+                        *(executor.execute(action) for executor in self.executors),
+                        return_exceptions=True
+                    )
+                finally:
+                    self.executor_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error executing action: {e}")
