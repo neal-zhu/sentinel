@@ -1,3 +1,6 @@
+# Sentinel Configuration Example
+# Copy this file to config.toml and modify as needed
+
 # General Settings
 name = "sentinel"
 log_level = "INFO"
@@ -8,18 +11,31 @@ enabled = ["web3_transaction"]
 
 [collectors.web3_transaction]
 rpc_url = "https://eth.llamarpc.com"
+start_block = null  # Optional, start from latest block if null
+block_time = 12    # Expected block time in seconds
+max_blocks_per_batch = 100
+retry_interval = 5
+max_retries = 3
 
 # Strategies Configuration
 [strategies]
+enabled = ["gas_tracker"]
 
+[strategies.gas_tracker]
+windows = { "1h" = 3600, "24h" = 86400 }  # Time windows in seconds
+
+# Executors Configuration
 [executors]
 enabled = ["logger", "wxpusher"]
 
 [executors.wxpusher]
-app_token = "your_app_token"
-uids = ["your_uid"]
+app_token = "your_app_token"  # WxPusher app token
+uids = ["your_uid"]          # Target user IDs
 default_summary = "Sentinel Alert"
+retry_times = 3
+retry_delay = 1
 
+# Logging Configuration
 [logging]
 level = "INFO"
 file = "logs/sentinel.log"

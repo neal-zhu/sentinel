@@ -1,36 +1,63 @@
+"""
+Gas usage tracking strategy
+
+Monitors and analyzes gas usage patterns across different time windows:
+- Tracks gas consumption by contract
+- Generates periodic reports
+- Identifies usage trends
+- Provides contract name resolution via Etherscan
+"""
+
 from collections import defaultdict
 from datetime import datetime
 from typing import List, Dict, Tuple
 import heapq
 
 from ..logger import logger
-
 from ..core.actions import Action
 from ..core.base import Strategy
 from ..core.events import TransactionEvent, Event
 from aioetherscan import Client
 
-
 class GasTracker(Strategy):
+    """
+    Strategy for tracking gas usage patterns across different time windows
+    
+    Features:
+    - Multiple time window analysis (e.g., 5min, 15min, 30min, 1h)
+    - Contract name resolution with caching
+    - Trend detection and status reporting
+    - Periodic report generation
+    """
+    
     __component_name__ = "gas_tracker"
 
     def __init__(self, windows: Dict[str, int] = None):
         """
-        初始化Gas跟踪器
+        Initialize gas tracker
         
         Args:
-            windows: 时间窗口配置，如 {"1h": 3600, "24h": 86400}
+            windows: Time window configuration, e.g., {"1h": 3600, "30min": 1800}
+                    Defaults to {"1h": 3600, "24h": 86400}
         """
         super().__init__()
-        self.windows = windows or {"1h": 3600, "30min": 1800, "15min": 900, "5min": 300}
+        self.windows = windows or {"1h": 3600, "24h": 86400}
         self.gas_usage = defaultdict(lambda: defaultdict(list))  # window -> contract -> [(timestamp, gas)]
         self.last_report_time = datetime.now()
-        self.report_interval = 300  # 5分钟生成一次报告
-        self.contract_names = {}  # 缓存合约名称
-        self.etherscan = None  # Etherscan客户端
+        self.report_interval = 300  # Generate report every 5 minutes
+        self.contract_names = {}  # Contract name cache
+        self.etherscan = None  # Etherscan client
 
     async def _get_contract_name(self, address: str) -> str:
-        """获取合约名称，带缓存"""
+        """
+        Get contract name with caching
+        
+        Args:
+            address: Contract address
+            
+        Returns:
+            str: Contract name or shortened address if not found
+        """
         if address in self.contract_names:
             return self.contract_names[address]
         
@@ -38,10 +65,10 @@ class GasTracker(Strategy):
             return address[:8] + '...'
         
         try:
-            # 尝试获取合约信息
+            # Try to get contract info
             contract_info = await self.etherscan.contract.contract_source_code(address)
             if contract_info and contract_info[0].get('Implementation'):
-                # 如果是代理合约，获取实现合约信息
+                # If proxy contract, get implementation contract info
                 impl_address = contract_info[0]['Implementation']
                 impl_info = await self.etherscan.contract.contract_source_code(impl_address)
                 if impl_info and impl_info[0].get('ContractName'):
@@ -55,17 +82,25 @@ class GasTracker(Strategy):
             return self.contract_names[address]
 
     async def process_event(self, event: Event) -> List[Action]:
-        """处理交易事件"""
+        """
+        Process transaction event and generate gas report if needed
+        
+        Args:
+            event: Event to process
+            
+        Returns:
+            List[Action]: List of actions to execute
+        """
         if not isinstance(event, TransactionEvent):
             return []
 
         current_time = datetime.now()
         actions = []
 
-        # 更新 gas 使用数据
+        # Update gas usage data
         self._update_gas_usage(event.tx_data, current_time)
 
-        # 检查是否需要生成报告
+        # Check if report should be generated
         if (current_time - self.last_report_time).total_seconds() >= self.report_interval:
             report = await self._generate_report(current_time)
             actions.append(Action(
@@ -77,7 +112,13 @@ class GasTracker(Strategy):
         return actions
 
     def _update_gas_usage(self, tx_data: Dict, current_time: datetime):
-        """更新gas使用数据"""
+        """
+        Update gas usage data for all time windows
+        
+        Args:
+            tx_data: Transaction data
+            current_time: Current timestamp
+        """
         gas_used = tx_data.get('gas', 0)
         contract_address = tx_data.get('to')
         
@@ -86,14 +127,21 @@ class GasTracker(Strategy):
 
         timestamp = current_time.timestamp()
         
-        # 为每个时间窗口更新数据
+        # Update data for each time window
         for window, seconds in self.windows.items():
             self.gas_usage[window][contract_address].append((timestamp, gas_used))
-            # 清理过期数据
+            # Clean old data
             self._clean_old_data(window, contract_address, timestamp - seconds)
 
     def _clean_old_data(self, window: str, contract: str, cutoff_time: float):
-        """清理指定时间之前的数据"""
+        """
+        Clean data older than cutoff time
+        
+        Args:
+            window: Time window name
+            contract: Contract address
+            cutoff_time: Cutoff timestamp
+        """
         usage_data = self.gas_usage[window][contract]
         while usage_data and usage_data[0][0] < cutoff_time:
             usage_data.pop(0)
@@ -101,15 +149,24 @@ class GasTracker(Strategy):
             del self.gas_usage[window][contract]
 
     def _get_top_contracts(self, window: str, current_time: float) -> List[Tuple[str, int, float]]:
-        """获取指定窗口的 top 10 合约及其 gas 使用情况"""
+        """
+        Get top 10 contracts by gas usage for specified window
+        
+        Args:
+            window: Time window name
+            current_time: Current timestamp
+            
+        Returns:
+            List[Tuple[str, int, float]]: List of (contract_address, total_gas, change_rate)
+        """
         cutoff_time = current_time - self.windows[window]
         contract_totals = []
         
         for contract, usage_data in self.gas_usage[window].items():
-            # 计算总 gas 使用量
+            # Calculate total gas usage
             total_gas = sum(gas for ts, gas in usage_data if ts > cutoff_time)
             if total_gas > 0:
-                # 计算变化率
+                # Calculate change rate
                 recent_gas = sum(gas for ts, gas in usage_data 
                                if ts > current_time - min(300, self.windows[window]))
                 old_gas = sum(gas for ts, gas in usage_data 
@@ -122,7 +179,15 @@ class GasTracker(Strategy):
         return heapq.nlargest(10, contract_totals, key=lambda x: x[1])
 
     async def _generate_report(self, current_time: datetime) -> Dict:
-        """生成完整的 gas 使用报告"""
+        """
+        Generate comprehensive gas usage report
+        
+        Args:
+            current_time: Current timestamp
+            
+        Returns:
+            Dict: Report data containing top contracts and their usage statistics
+        """
         current_ts = current_time.timestamp()
         report = {
             'timestamp': current_time.isoformat(),
@@ -133,7 +198,7 @@ class GasTracker(Strategy):
             top_contracts = self._get_top_contracts(window, current_ts)
             report['top_contracts'][window] = []
             
-            # 异步获取所有合约名称
+            # Get contract names asynchronously
             for contract, total_gas, change_rate in top_contracts:
                 name = await self._get_contract_name(contract)
                 report['top_contracts'][window].append({
@@ -147,16 +212,24 @@ class GasTracker(Strategy):
         return report
 
     def _get_status(self, change_rate: float) -> str:
-        """根据变化率确定状态"""
+        """
+        Get status indicator based on change rate
+        
+        Args:
+            change_rate: Gas usage change rate in percentage
+            
+        Returns:
+            str: Status indicator with emoji
+        """
         if change_rate > 100:
-            return "急剧上升 🚀"
+            return "Surging 🚀"
         elif change_rate > 50:
-            return "显著上升 ⬆️"
+            return "Rising Fast ⬆️"
         elif change_rate > 20:
-            return "上升 📈"
+            return "Rising 📈"
         elif change_rate < -50:
-            return "显著下降 ⬇️"
+            return "Dropping Fast ⬇️"
         elif change_rate < -20:
-            return "下降 📉"
+            return "Dropping 📉"
         else:
-            return "稳定 ➡️"
+            return "Stable ➡️"

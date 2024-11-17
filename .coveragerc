@@ -1,0 +1,5 @@
+[run]
+source = sentinel
+omit = 
+    tests/*
+    setup.py

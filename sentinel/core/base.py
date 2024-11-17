@@ -9,21 +9,21 @@ from ..logger import logger
 T = TypeVar('T', bound='Component')
 
 class Component(ABC):
-    """所有组件的基类"""
+    """All components base class"""
     
     _registry: ClassVar[Dict[str, Type[T]]] = {}
     _component_name: str = None
     
     def __init_subclass__(cls, **kwargs):
         """
-        这个方法在子类被创建时自动调用
-        只有显式设置了 __component_name__ 的类才会被注册
+        This method is called automatically when a subclass is created
+        Only classes with explicitly set __component_name__ will be registered
         """
         super().__init_subclass__(**kwargs)
         
         component_name = getattr(cls, '__component_name__', None)
         if component_name:
-            # 找到最近的带有 _registry 的基类
+            # Find the nearest base class with _registry
             for base in cls.__mro__[1:]:
                 if hasattr(base, '_registry'):
                     base._registry[component_name] = cls
@@ -33,17 +33,17 @@ class Component(ABC):
     @classmethod
     def create(cls: Type[T], name: str, **kwargs) -> T:
         """
-        创建组件实例
+        Create component instance
         
         Args:
-            name: 组件名称
-            **kwargs: 组件初始化参数
+            name: Component name
+            **kwargs: Component initialization parameters
             
         Returns:
-            Component: 组件实例
+            Component: Component instance
             
         Raises:
-            ValueError: 组件未注册
+            ValueError: Component not registered
         """
         if name not in cls._registry:
             raise ValueError(f"No {cls.__name__} registered with name: {name}")
@@ -58,16 +58,16 @@ class Component(ABC):
     @classmethod
     @abstractmethod
     def config_prefix(cls) -> str:
-        """配置前缀"""
+        """Configuration prefix"""
         pass
     
     @property
     def name(self) -> str:
-        """组件名称"""
+        """Component name"""
         return self._component_name
 
 class Collector(Component):
-    """收集器基类"""
+    """Collector base class"""
     def __init__(self):
         self._running = False
         self._started = False
@@ -77,7 +77,7 @@ class Collector(Component):
         return "collectors"
     
     async def start(self):
-        """启动收集器"""
+        """Start collector"""
         if self._started:
             return
         try:
@@ -92,7 +92,7 @@ class Collector(Component):
             raise
     
     async def stop(self):
-        """停止收集器"""
+        """Stop collector"""
         if not self._started:
             return
         try:
@@ -105,48 +105,48 @@ class Collector(Component):
             raise
     
     async def _start(self):
-        """子类可以重写此方法以实现自定义启动逻辑"""
+        """Subclasses can override this method to implement custom startup logic"""
         pass
     
     async def _stop(self):
-        """子类可以重写此方法以实现自定义停止逻辑"""
+        """Subclasses can override this method to implement custom shutdown logic"""
         pass
     
     @property
     def is_running(self) -> bool:
-        """收集器是否正在运行"""
+        """Whether the collector is running"""
         return self._running
     
     @abstractmethod
     async def events(self) -> AsyncIterable[Event]:
-        """生成事件流"""
+        """Generate event stream"""
         pass
 
 class Strategy(Component):
-    """策略基类"""
+    """Strategy base class"""
     @classmethod
     def config_prefix(cls) -> str:
         return "strategies"
     
     @abstractmethod
     async def process_event(self, event: Event) -> List[Action]:
-        """处理事件并生成动作"""
+        """Process event and generate actions"""
         pass
 
 class Executor(Component):
-    """执行器基类"""
+    """Executor base class"""
     @classmethod
     def config_prefix(cls) -> str:
         return "executors"
     
     @abstractmethod
     async def execute(self, action: Action) -> None:
-        """执行动作"""
+        """Execute action"""
         pass
 
-# 函数包装器类
+# Function collector wrapper
 class FunctionCollector(Collector):
-    """函数收集器包装器"""
+    """Function collector wrapper"""
     def __init__(self, func: Callable[[], AsyncIterable[Event]], name: Optional[str] = None):
         super().__init__()
         self._func = func
@@ -169,7 +169,7 @@ class FunctionCollector(Collector):
                 await self.stop()
 
 class FunctionStrategy(Strategy):
-    """函数策略包装器"""
+    """Function strategy wrapper"""
     def __init__(self, func: Callable[[Event], Awaitable[List[Action]]], name: Optional[str] = None):
         super().__init__()
         self._func = func
@@ -183,7 +183,7 @@ class FunctionStrategy(Strategy):
             return []
 
 class FunctionExecutor(Executor):
-    """函数执行器包装器"""
+    """Function executor wrapper"""
     def __init__(self, func: Callable[[Action], Awaitable[None]], name: Optional[str] = None):
         super().__init__()
         self._func = func

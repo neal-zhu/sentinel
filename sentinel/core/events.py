@@ -4,33 +4,53 @@ from web3.types import BlockData, TxData
 from pydantic import BaseModel, Field
 
 class Event(BaseModel):
-    """事件基类"""
-    type: str = Field(...)  # 必须提供类型
+    """Base class for all events"""
+    type: str = Field(...)  # Required field
 
     class Config:
-        """Pydantic配置"""
-        frozen = True  # 使Event实例不可变
-        arbitrary_types_allowed = True  # 允许任意类型
+        """Pydantic configuration"""
+        frozen = True  # Make Event instances immutable
+        arbitrary_types_allowed = True  # Allow Web3 types
 
 class TransactionEvent(Event):
-    """交易事件"""
-    type: str = "transaction"  # 默认类型
-    transaction: Dict[str, Any]  # 使用字典存储交易数据
-    block: Dict[str, Any]  # 使用字典存储区块数据
+    """
+    Event class for blockchain transactions
+    
+    Stores transaction and block data in dictionary format for flexibility,
+    while providing typed access through properties.
+    """
+    type: str = "transaction"  # Default event type
+    transaction: Dict[str, Any]  # Raw transaction data
+    block: Dict[str, Any]  # Raw block data
     timestamp: datetime
     
     @property
     def tx_data(self) -> TxData:
-        """获取原始交易数据"""
+        """
+        Get transaction data as Web3 TxData type
+        
+        Returns:
+            TxData: Typed transaction data
+        """
         return TxData(self.transaction)
     
     @property
     def block_data(self) -> BlockData:
-        """获取原始区块数据"""
+        """
+        Get block data as Web3 BlockData type
+        
+        Returns:
+            BlockData: Typed block data
+        """
         return BlockData(self.block)
     
     def __str__(self) -> str:
-        """格式化事件内容为字符串"""
+        """
+        Format event content as human-readable string
+        
+        Returns:
+            str: Formatted event information
+        """
         return (
             f"Transaction Event:\n"
             f"  Hash: {self.transaction['hash'].hex()}\n"
@@ -42,7 +62,12 @@ class TransactionEvent(Event):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
+        """
+        Convert event to dictionary format
+        
+        Returns:
+            Dict[str, Any]: Event data in dictionary format
+        """
         return {
             "type": self.type,
             "transaction_hash": self.transaction['hash'].hex(),

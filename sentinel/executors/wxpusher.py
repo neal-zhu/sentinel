@@ -1,3 +1,13 @@
+"""
+WxPusher notification executor
+
+Sends notifications via WxPusher service with:
+- Retry mechanism
+- Message formatting
+- Error handling
+- Rate limiting
+"""
+
 from typing import Optional, List, Union
 from wxpusher import WxPusher
 import asyncio

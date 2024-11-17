@@ -1,3 +1,13 @@
+"""
+Basic test suite for Sentinel
+
+Tests:
+- Basic event flow
+- Configuration loading
+- Event and action creation
+- Component integration
+"""
+
 import asyncio
 import pytest
 from datetime import datetime
@@ -9,27 +19,28 @@ from sentinel.core.actions import Action
 from sentinel.config import Config
 from sentinel.core.sentinel import Sentinel
 
-# 模拟区块数据
+# Mock block data
 MOCK_BLOCK = {
     'number': 1000,
     'timestamp': int(datetime.now().timestamp()),
-    'hash': HexBytes('0x00'),
+    'hash': HexBytes('0xabcd1234'),
     'transactions': [{
-        'hash': HexBytes('0x1234'),
+        'hash': HexBytes('0x1234abcd'),
         'from': '0xsender',
         'to': '0xreceiver',
         'value': 1000000,
         'gas': 21000,
         'gasPrice': 20000000000,
         'nonce': 0,
-        'blockHash': HexBytes('0x00'),
+        'blockHash': HexBytes('0xabcd1234'),
         'blockNumber': 1000,
         'transactionIndex': 0,
     }]
 }
 
-# 模拟收集器
+# Mock collector
 async def mock_collector():
+    """Generate mock transaction events"""
     for i in range(3):
         yield TransactionEvent(
             transaction=MOCK_BLOCK['transactions'][0],
@@ -38,41 +49,41 @@ async def mock_collector():
         )
         await asyncio.sleep(0.1)
 
-# 模拟策略
+# Mock strategy
 async def mock_strategy(event: Event) -> list[Action]:
+    """Generate test actions from events"""
     return [Action(
         type="test_action",
         data={"event_type": event.type, "timestamp": str(datetime.now())}
     )]
 
-# 记录执行的动作
+# Track executed actions
 executed_actions = []
 
-# 模拟执行器
+# Mock executor
 async def mock_executor(action: Action):
+    """Record executed actions"""
     executed_actions.append(action)
+
+@pytest.fixture(autouse=True)
+def clear_executed_actions():
+    """Clear executed actions before each test"""
+    executed_actions.clear()
+    yield
 
 @pytest.mark.asyncio
 async def test_basic_flow():
-    """测试基本的事件流程"""
-    # 创建 Sentinel 实例
+    """Test basic event processing flow"""
     sentinel = Sentinel()
     
-    # 添加组件
     sentinel.add_collector(mock_collector)
     sentinel.add_strategy(mock_strategy)
     sentinel.add_executor(mock_executor)
     
-    # 启动处理
     await sentinel.start()
-    
-    # 等待一段时间让事件处理完成
-    await asyncio.sleep(1)
-    
-    # 停止处理
+    await asyncio.sleep(1)  # Wait for events to process
     await sentinel.stop()
     
-    # 验证结果
     assert len(executed_actions) == 3
     for action in executed_actions:
         assert action.type == "test_action"
@@ -81,17 +92,37 @@ async def test_basic_flow():
 
 @pytest.mark.asyncio
 async def test_config_loading():
-    """测试配置加载"""
-    config = Config("config.toml.example")
+    """Test configuration loading"""
+    # Create a temporary config file for testing
+    import tempfile
+    import tomli_w
+    
+    config_data = {
+        "collectors": {
+            "enabled": ["web3_transaction"],
+            "web3_transaction": {
+                "rpc_url": "https://eth.llamarpc.com"
+            }
+        },
+        "executors": {
+            "enabled": ["wxpusher"]
+        }
+    }
+    
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.toml', delete=False) as f:
+        tomli_w.dump(config_data, f)
+        config_path = f.name
+    
+    config = Config(config_path)
     
     assert "web3_transaction" in config.collectors
-    assert "wxpusher" in config.get("executors", {}).get("enabled", [])
+    assert "wxpusher" in config.executors
     
     collector_config = config.get_collector_config("web3_transaction")
     assert "rpc_url" in collector_config
 
 def test_event_creation():
-    """测试事件创建"""
+    """Test event object creation"""
     event = TransactionEvent(
         transaction=MOCK_BLOCK['transactions'][0],
         block=MOCK_BLOCK,
@@ -99,11 +130,11 @@ def test_event_creation():
     )
     
     assert event.type == "transaction"
-    assert event.transaction['hash'] == HexBytes('0x1234')
-    assert event.block['number'] == 1000
+    assert event.transaction['hash'] == MOCK_BLOCK['transactions'][0]['hash']
+    assert event.block['number'] == MOCK_BLOCK['number']
 
 def test_action_creation():
-    """测试动作创建"""
+    """Test action object creation"""
     action = Action(
         type="test",
         data={"key": "value"}

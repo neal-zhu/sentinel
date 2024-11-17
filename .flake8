@@ -1,0 +1,51 @@
+[flake8]
+# 最大行长度
+max-line-length = 120
+
+# 忽略某些错误
+ignore =
+    # E203: whitespace before ':' (与 black 格式化冲突)
+    E203,
+    # W503: line break before binary operator (与 black 格式化冲突)
+    W503,
+    # E402: module level import not at top of file
+    E402,
+    # F403: 'from module import *' used
+    F403,
+    # F405: name may be undefined, or defined from star imports
+    F405
+
+# 排除的目录
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    *.egg-info,
+    .eggs,
+    .tox,
+    .venv,
+    venv,
+    .env,
+    env
+
+# 每个函数/类的最大复杂度
+max-complexity = 12
+
+# 统计信息格式
+statistics = True
+
+# 每个文件的最大行数
+max-doc-length = 100
+
+# 代码块注释缩进
+indent-after-paren = 4
+
+# 允许的变量名格式
+variable-rgx = [a-z_][a-z0-9_]{0,30}$
+
+# 类名格式
+class-rgx = [A-Z_][a-zA-Z0-9]+$
+
+# 函数名格式
+function-rgx = [a-z_][a-z0-9_]{0,30}$

@@ -1,3 +1,13 @@
+"""
+Logging configuration for Sentinel
+
+Provides:
+- Console and file logging
+- Log rotation
+- Configurable log levels
+- Structured log format
+"""
+
 import sys
 from loguru import logger
 from typing import Dict, Any

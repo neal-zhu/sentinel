@@ -1,3 +1,13 @@
+"""
+Web3 transaction collector
+
+Collects blockchain transactions from specified RPC endpoint with:
+- Automatic retry mechanism
+- Batch processing
+- Error recovery
+- Configurable polling interval
+"""
+
 from typing import Optional, AsyncGenerator
 from web3 import AsyncWeb3, AsyncHTTPProvider
 from web3.types import BlockData
