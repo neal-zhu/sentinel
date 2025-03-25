@@ -9,7 +9,7 @@ class SentinelBuilder:
     
     def __init__(self, config: Config):
         self.config = config
-        self.artemis = Sentinel()
+        self.sentinel = Sentinel()
         self.collectors: List[Collector] = []
         self.strategies: List[Strategy] = []
         self.executors: List[Executor] = []
@@ -63,12 +63,12 @@ class SentinelBuilder:
         """构建最终的 Sentinel 实例"""
         # 添加所有组件
         for collector in self.collectors:
-            self.artemis.add_collector(collector)
+            self.sentinel.add_collector(collector)
         
         for strategy in self.strategies:
-            self.artemis.add_strategy(strategy)
+            self.sentinel.add_strategy(strategy)
         
         for executor in self.executors:
-            self.artemis.add_executor(executor)
+            self.sentinel.add_executor(executor)
         
-        return self.artemis
+        return self.sentinel

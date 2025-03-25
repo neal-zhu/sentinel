@@ -37,6 +37,8 @@ python-dotenv==1.0.1
 python-telegram-bot==21.6
 pyunormalize==16.0.0
 PyYAML==6.0.2
+pytest==8.0.2
+pytest-asyncio==0.23.5
 regex==2024.9.11
 requests==2.32.3
 rlp==4.0.1
