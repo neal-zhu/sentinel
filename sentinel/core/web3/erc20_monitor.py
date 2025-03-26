@@ -5,7 +5,7 @@ from web3 import Web3
 from web3.contract import Contract
 from eth_typing import Address
 
-from .node_manager import NodeManager
+from .multi_provider import MultiNodeProvider
 from .base import (
     ERC20_ABI,
     TRANSFER_EVENT_TOPIC,
@@ -20,7 +20,7 @@ class ERC20Monitor:
     
     def __init__(
         self,
-        node_manager: NodeManager,
+        provider: MultiNodeProvider,
         token_address: str,
         min_amount: float = 1000.0,  # Minimum amount to track
         time_window: int = 3600,  # Time window in seconds for analysis
@@ -30,23 +30,29 @@ class ERC20Monitor:
         Initialize the ERC20 monitor.
         
         Args:
-            node_manager: NodeManager instance for Web3 interactions
+            provider: MultiNodeProvider instance for Web3 interactions
             token_address: Address of the token to monitor
             min_amount: Minimum token amount to track
             time_window: Time window in seconds for analyzing patterns
             known_addresses: List of known addresses to track
         """
-        self.node_manager = node_manager
+        self.provider = provider
+        self.w3 = Web3(provider)
         self.token_address = Web3.to_checksum_address(token_address)
         self.min_amount = min_amount
         self.time_window = time_window
         self.known_addresses = set(addr.lower() for addr in (known_addresses or []))
         
         # Initialize token contract
-        self.contract: Contract = self.node_manager.web3_instances[0].eth.contract(
+        self.contract: Contract = self.w3.eth.contract(
             address=self.token_address,
             abi=ERC20_ABI
         )
+        
+        # Initialize properties that will be set during initialize()
+        self.decimals = None
+        self.symbol = None
+        self.name = None
         
         # Initialize tracking structures
         self.transfers: List[Dict[str, Any]] = []

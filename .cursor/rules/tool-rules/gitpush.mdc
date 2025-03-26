@@ -1,0 +1,35 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+
+# Git Push Manual Rule
+
+## Context
+
+Used when user indicates they want to update all saved changes in git
+
+## Critical Rules
+
+- Run the command `git add .` from the root of the workspace
+- Review all added changes that will be included in the commit
+- Use format for title: `type: brief description` - keep it brief and descriptive (max 72 chars)
+- Add two line breaks after commit title
+- Include short paragraph summary of gist of what and why the change is being made and end with " -Agent Generated Commit Message"
+- Push all to the remote current branch
+
+## Examples
+
+<example>
+doc: explain recent rules changes in cursor
+
+Updated the readme to include a better diagram showing rules workflow, while
+also adding more sample rules to show rule folder organization. Specifically, notice that the change to `.cursor/rules/*folders` include readme.md files also to aid in understanding the folders purpose for human developers. AI gets its understanding from `.cursor/rules/rule-generating-agent.mdc` instead.
+
+-Agent Generated Commit Message
+</example>
+
+<example type="invalid">
+fixed stuff
+</example>

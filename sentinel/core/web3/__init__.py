@@ -1,5 +1,4 @@
-from .node_manager import NodeManager
-from .erc20_monitor import ERC20Monitor
+from .multi_provider import MultiNodeProvider, AsyncMultiNodeProvider
 from .base import (
     ERC20_ABI,
     TRANSFER_EVENT_TOPIC,
@@ -9,8 +8,8 @@ from .base import (
 )
 
 __all__ = [
-    'NodeManager',
-    'ERC20Monitor',
+    'MultiNodeProvider',
+    'AsyncMultiNodeProvider',
     'ERC20_ABI',
     'TRANSFER_EVENT_TOPIC',
     'format_token_amount',

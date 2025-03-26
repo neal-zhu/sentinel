@@ -17,7 +17,7 @@ eth-hash==0.7.0
 eth-keyfile==0.8.1
 eth-keys==0.6.0
 eth-rlp==2.1.0
-eth-typing==5.0.1
+eth-typing==5.0.0
 eth-utils==5.1.0
 eth_abi==5.1.0
 frozenlist==1.5.0
