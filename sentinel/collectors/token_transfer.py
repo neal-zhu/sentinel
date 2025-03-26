@@ -1,14 +1,13 @@
 import asyncio
-import time
-from typing import Dict, List, Optional, Any, AsyncIterable, Set, Union, cast, Coroutine, AsyncGenerator, TypedDict, get_args
+from typing import Dict, List, Optional, Any, AsyncIterable, Coroutine, TypedDict, AsyncGenerator
 from datetime import datetime
-from web3 import Web3
-from web3.types import BlockData, TxData
+from web3 import AsyncWeb3, Web3
+from web3.types import FilterParams
 
 from sentinel.core.base import Collector
 from sentinel.core.events import Event, TokenTransferEvent
-from sentinel.core.web3.multi_provider import MultiNodeProvider, AsyncMultiNodeProvider
-from sentinel.core.web3.erc20_token import ERC20Token
+from sentinel.core.web3.multi_provider import AsyncMultiNodeProvider, MultiNodeProvider
+from sentinel.core.web3.erc20_token import ERC20Token, AsyncERC20Token
 from sentinel.core.storage import BlockchainStateStore
 from sentinel.logger import logger
 
@@ -172,13 +171,13 @@ class TokenTransferCollector(Collector):
         self.state_store = BlockchainStateStore(db_path)
         
         # Web3 connections for each network
-        self.web3_connections: Dict[str, Web3] = {}
+        self.web3_connections: Dict[str, AsyncWeb3] = {}
         
         # Last checked block for each network (in-memory cache)
         self.last_checked_block: Dict[str, int] = {}
         
         # Known token cache
-        self.token_cache: Dict[str, Dict[str, ERC20Token]] = {}
+        self.token_cache: Dict[str, Dict[str, AsyncERC20Token]] = {}
         
         # Initialize Web3 connection for each network
         for network_name, network_config in self.networks.items():
@@ -190,44 +189,55 @@ class TokenTransferCollector(Collector):
                 
             # Create Web3 connection
             endpoints = network_config['rpc_endpoints']
-            provider = MultiNodeProvider(endpoint_uri=endpoints)
-            web3 = Web3(provider)
+            provider = AsyncMultiNodeProvider(endpoint_uri=endpoints)
+            web3 = AsyncWeb3(provider)
             
             # Store Web3 connection
             self.web3_connections[network_name] = web3
             
             # Initialize token cache
             self.token_cache[network_name] = {}
-            
-            # Create component-specific key for block tracking
-            block_key = f"{self.__component_name__}:{network_name}"
-            
-            # Get the last processed block from persistent storage
-            last_block = self.state_store.get_last_processed_block(block_key)
-            
-            # Set starting block based on storage, config, or current block
-            if last_block is not None:
-                logger.info(f"Resuming from last processed block {last_block} for {block_key}")
-                self.last_checked_block[network_name] = last_block
-            elif network_name in self.start_block:
-                logger.info(f"Starting from configured block {self.start_block[network_name]} for {block_key}")
-                self.last_checked_block[network_name] = self.start_block[network_name]
-            else:
-                # Default to current block
-                try:
-                    current_block = web3.eth.block_number
-                    logger.info(f"Starting from current block {current_block} for {block_key}")
-                    self.last_checked_block[network_name] = current_block
-                except Exception as e:
-                    logger.error(f"Unable to get current block for {block_key}: {e}")
-                    self.last_checked_block[network_name] = 0
+    
+    async def _initialize_last_blocks(self):
+        """Initialize last processed blocks for all networks"""
+        for network_name, web3 in self.web3_connections.items():
+            try:
+                # Create component-specific key for block tracking
+                block_key = f"{self.__component_name__}:{network_name}"
+                
+                # Get the last processed block from persistent storage
+                last_block = self.state_store.get_last_processed_block(block_key)
+                
+                # Set starting block based on storage, config, or current block
+                if last_block is not None:
+                    logger.info(f"Resuming from last processed block {last_block} for {block_key}")
+                    self.last_checked_block[network_name] = last_block
+                elif network_name in self.start_block:
+                    logger.info(f"Starting from configured block {self.start_block[network_name]} for {block_key}")
+                    self.last_checked_block[network_name] = self.start_block[network_name]
+                else:
+                    # Default to current block
+                    try:
+                        # 使用 await 获取当前区块高度
+                        current_block = await web3.eth.block_number
+                        logger.info(f"Starting from current block {current_block} for {block_key}")
+                        self.last_checked_block[network_name] = current_block
+                    except Exception as e:
+                        logger.error(f"Unable to get current block for {block_key}: {e}")
+                        self.last_checked_block[network_name] = 0
+            except Exception as e:
+                logger.error(f"Error initializing last blocks for {network_name}: {e}")
+                self.last_checked_block[network_name] = 0
     
     async def _start(self):
         """Collector initialization logic on startup"""
+        # Initialize last blocks
+        await self._initialize_last_blocks()
+        
         # Verify all Web3 connections
         for network_name, web3 in self.web3_connections.items():
             try:
-                if not web3.is_connected():
+                if not await web3.is_connected():
                     logger.warning(f"Unable to connect to network {network_name}")
             except Exception as e:
                 logger.error(f"Error checking connection to network {network_name}: {e}")
@@ -241,7 +251,9 @@ class TokenTransferCollector(Collector):
             web3 = self.web3_connections[network_name]
             for token_address in token_list:
                 try:
-                    token = ERC20Token(web3, token_address)
+                    token = AsyncERC20Token(web3, token_address)
+                    # 初始化token属性
+                    await token._init_properties()
                     self.token_cache[network_name][token_address.lower()] = token
                     logger.info(f"Loaded token {token.symbol} ({token_address}) on network {network_name}")
                 except Exception as e:
@@ -253,16 +265,16 @@ class TokenTransferCollector(Collector):
         if hasattr(self, 'state_store'):
             self.state_store.close()
     
-    def _get_token(self, network_name: str, token_address: str) -> Optional[ERC20Token]:
+    async def _get_token(self, network_name: str, token_address: str) -> Optional[AsyncERC20Token]:
         """
-        Get ERC20 token instance, using cache
+        Get ERC20 token instance asynchronously, using cache
         
         Args:
             network_name: Network name
             token_address: Token contract address
             
         Returns:
-            Optional[ERC20Token]: Token instance or None
+            Optional[AsyncERC20Token]: Token instance or None
         """
         if network_name not in self.web3_connections:
             return None
@@ -276,13 +288,15 @@ class TokenTransferCollector(Collector):
         # Create new token instance
         try:
             web3 = self.web3_connections[network_name]
-            token = ERC20Token(web3, token_address)
+            token = AsyncERC20Token(web3, token_address)
+            # 初始化token属性
+            await token._init_properties()
             self.token_cache[network_name][token_address] = token
             return token
         except Exception as e:
             logger.error(f"Error creating token {token_address} instance on network {network_name}: {e}")
             return None
-    
+
     async def _scan_erc20_transfers(self, network_name: str, from_block: int, to_block: int) -> List[TokenTransferEvent]:
         """
         Scan a block range for ERC20 transfer events
@@ -307,64 +321,94 @@ class TokenTransferCollector(Collector):
         if network_name in self.token_addresses:
             token_addresses = self.token_addresses[network_name]
         
-        # If specific tokens are specified, only monitor those
-        if token_addresses:
-            for token_address in token_addresses:
-                token = self._get_token(network_name, token_address)
-                if not token:
-                    continue
-                    
+        # If no tokens specified, return empty list
+        if not token_addresses:
+            return []
+
+        # Get logs for all specified tokens
+        try:
+            # Create Transfer event signature hash
+            event_signature_hash = web3.keccak(
+                text="Transfer(address,address,uint256)"
+            ).hex()
+            
+            # Get logs for all tokens
+            logs_filter = {
+                'fromBlock': from_block,
+                'toBlock': to_block,
+                'address': [web3.to_checksum_address(addr) for addr in token_addresses],
+                'topics': [event_signature_hash]
+            }
+            
+            transfer_logs = await web3.eth.get_logs(logs_filter)
+            
+            # Process each log
+            for log in transfer_logs:
                 try:
-                    # Get transfer events
-                    transfer_logs = token.get_transfer_events(from_block, to_block)
+                    # Get token address (contract address that emitted the event)
+                    token_address = log['address']
                     
-                    # Process each event
-                    for event in transfer_logs:
-                        try:
-                            # Get sender and receiver
-                            from_address = event['args']['from']
-                            to_address = event['args']['to']
-                                
-                            # Format event data
-                            formatted_event = token.format_transfer_event(event)
-                                
-                            # Get block information for timestamp
-                            block = web3.eth.get_block(event['blockNumber'])
-                            block_dict = dict(block) if block else {}
-                            
-                            # Use the helper function for safe timestamp conversion
-                            timestamp = safe_timestamp_to_float(block_dict.get("timestamp"))
-                                
-                            if timestamp > 0:
-                                block_timestamp = datetime.fromtimestamp(timestamp)
-                            else:
-                                # Fallback to current time if timestamp is missing
-                                logger.warning(f"Missing timestamp for block {event['blockNumber']}, using current time")
-                                block_timestamp = datetime.now()
-                            
-                            # Create transfer event
-                            transfer_event = TokenTransferEvent(
-                                chain_id=chain_id,
-                                token_address=token.address,
-                                token_name=token.name,
-                                token_symbol=token.symbol,
-                                token_decimals=token.decimals,
-                                from_address=from_address,
-                                to_address=to_address,
-                                value=formatted_event['value'],
-                                formatted_value=formatted_event['formatted_value'],
-                                transaction_hash=formatted_event['transaction_hash'],
-                                block_number=event['blockNumber'],
-                                block_timestamp=block_timestamp,
-                                log_index=event['logIndex'],
-                                is_native=False
-                            )
-                            
-                            events.append(transfer_event)
-                        except Exception as e:
-                            logger.error(f"Error processing ERC20 transfer event: {e}")
+                    # Get token object
+                    token = await self._get_token(network_name, token_address)
+                    if not token:
+                        logger.warning(f"Could not get token at {token_address} on {network_name}")
+                        continue
+                    
+                    # Extract data from log
+                    topics = log['topics']
+                    
+                    # Extract from and to addresses from topics
+                    # Topics[0] is the event signature
+                    # Topics[1] is the indexed 'from' address
+                    # Topics[2] is the indexed 'to' address
+                    from_address = Web3.to_checksum_address('0x' + topics[1].hex()[-40:])
+                    to_address = Web3.to_checksum_address('0x' + topics[2].hex()[-40:])
+                    
+                    # Extract value from data (non-indexed parameter)
+                    # For Transfer events, data contains just the uint256 value
+                    value = int(log['data'].hex(), 16)
+                    
+                    # Format the value based on token decimals
+                    formatted_value = value / (10 ** token.decimals)
+                    
+                    # Get block information for timestamp
+                    block = await web3.eth.get_block(log['blockNumber'])
+                    block_dict = dict(block) if block else {}
+                    
+                    # Use the helper function for safe timestamp conversion
+                    timestamp = safe_timestamp_to_float(block_dict.get("timestamp"))
+                    
+                    if timestamp > 0:
+                        block_timestamp = datetime.fromtimestamp(timestamp)
+                    else:
+                        # Fallback to current time if timestamp is missing
+                        logger.warning(f"Missing timestamp for block {log['blockNumber']}, using current time")
+                        block_timestamp = datetime.now()
+                    
+                    # Create transfer event
+                    transfer_event = TokenTransferEvent(
+                        chain_id=chain_id,
+                        token_address=token.address,
+                        token_name=token.name,
+                        token_symbol=token.symbol,
+                        token_decimals=token.decimals,
+                        from_address=from_address,
+                        to_address=to_address,
+                        value=value,
+                        formatted_value=formatted_value,
+                        transaction_hash=log['transactionHash'].hex(),
+                        block_number=log['blockNumber'],
+                        block_timestamp=block_timestamp,
+                        log_index=log['logIndex'],
+                        is_native=False
+                    )
+                    logger.info(f"Transfer event: {transfer_event}")
+                    
+                    events.append(transfer_event)
                 except Exception as e:
-                    logger.error(f"Error getting transfer events for token {token_address} on network {network_name}: {e}")
+                    logger.error(f"Error processing ERC20 transfer event: {e}")
+        except Exception as e:
+            logger.error(f"Error getting transfer logs for network {network_name}: {e}")
                 
         return events
     
@@ -397,8 +441,8 @@ class TokenTransferCollector(Collector):
         # Scan blocks
         for block_num in range(from_block, to_block + 1):
             try:
-                # Get block
-                block = web3.eth.get_block(block_num, full_transactions=True)
+                # Get block with await
+                block = await web3.eth.get_block(block_num, full_transactions=True)
                 block_dict = dict(block) if block else {}
                 
                 # Use the helper function for safe timestamp conversion
@@ -411,8 +455,10 @@ class TokenTransferCollector(Collector):
                     logger.warning(f"Missing timestamp for block {block_num}, using current time")
                     block_timestamp = datetime.now()
                 
-                # Use the helper function for safe list conversion
-                transactions = safe_to_list(block_dict.get("transactions", []))
+                # Extract transactions from block
+                transactions = block_dict.get("transactions", [])
+                if not isinstance(transactions, list):
+                    transactions = []
                 
                 for raw_tx in transactions:
                     try:
@@ -484,8 +530,8 @@ class TokenTransferCollector(Collector):
                 
         return events
     
-    # Match the return type to the base class exactly
-    async def events(self) -> Coroutine[Any, Any, AsyncIterable[Event]]:
+    # 修复返回类型，将异步生成器作为返回类型
+    async def events(self) -> AsyncGenerator[Event, None]:
         """
         Generate event stream
         
@@ -503,7 +549,7 @@ class TokenTransferCollector(Collector):
                 for network_name, web3 in self.web3_connections.items():
                     try:
                         # Get current block
-                        current_block = web3.eth.block_number
+                        current_block = await web3.eth.block_number
                         last_checked = self.last_checked_block.get(network_name, current_block-1)
                         
                         # Ensure we only scan new blocks
@@ -559,30 +605,6 @@ class TokenTransferCollector(Collector):
                             
                     except Exception as e:
                         logger.error(f"Error collecting token transfer events for network {network_name}: {e}")
-                        
-                        # Check for possible chain reorganization
-                        try:
-                            # If we failed to get events, we might have hit a reorg
-                            # Let's check if we can get the block we thought we processed last time
-                            last_block = self.last_checked_block.get(network_name, 0)
-                            
-                            # Create component-specific key for block tracking
-                            block_key = f"{self.__component_name__}:{network_name}"
-                            
-                            # Try to get the block
-                            try:
-                                # If this succeeds, the block exists
-                                web3.eth.get_block(last_block)
-                            except Exception:
-                                # Block doesn't exist, likely due to chain reorg
-                                # Rewind 12 blocks (typical reorg depth for PoW chains)
-                                rewind_to = max(0, last_block - 12)
-                                logger.warning(f"Possible chain reorganization detected on {block_key}. "
-                                              f"Rewinding from block {last_block} to {rewind_to}")
-                                self.last_checked_block[network_name] = rewind_to
-                                self.state_store.handle_block_reorg(block_key, rewind_to)
-                        except Exception as reorg_e:
-                            logger.error(f"Error checking for chain reorganization on {network_name}: {reorg_e}")
                 
                 # Add a small yield before sleeping to make tests more reliable
                 if not any(self.web3_connections):
