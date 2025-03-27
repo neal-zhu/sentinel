@@ -10,7 +10,7 @@ enabled = ["token_transfer"]
 # 轮询间隔（秒）
 polling_interval = 15
 # 每次扫描的最大区块数
-max_blocks_per_scan = 10
+max_blocks_per_scan = 1
 # 包括原生代币（ETH）转账
 include_native_transfers = true
 # 包括ERC20代币转账

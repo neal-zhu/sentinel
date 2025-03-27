@@ -52,3 +52,4 @@ web3==7.4.0
 websockets==13.1
 wxpusher==2.3.0
 yarl==1.16.0
+aiodiskqueue>=0.1.2
