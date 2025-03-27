@@ -1,43 +1,38 @@
-# Sentinel Configuration Example
-# Copy this file to config.toml and modify as needed
-
 # General Settings
-name = "sentinel"
+name = "artemis"
 log_level = "INFO"
 
 # Collectors Configuration
 [collectors]
-enabled = ["web3_transaction"]
+enabled = ["token_transfer"]
 
-[collectors.web3_transaction]
-rpc_url = "https://eth.llamarpc.com"
-start_block = null  # Optional, start from latest block if null
-block_time = 12    # Expected block time in seconds
-max_blocks_per_batch = 100
-retry_interval = 5
-max_retries = 3
+[collectors.token_transfer]
+# 轮询间隔（秒）
+polling_interval = 15
+# 每次扫描的最大区块数
+max_blocks_per_scan = 10
+# 包括原生代币（ETH）转账
+include_native_transfers = true
+# 包括ERC20代币转账
+include_erc20_transfers = true
+
+# 网络配置
+[collectors.token_transfer.networks]
+[collectors.token_transfer.networks.ethereum]
+chain_id = 1
+rpc_endpoints = ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth"]
+
+# 代币地址配置 - 指定要监控的代币
+[collectors.token_transfer.token_addresses]
+# 以太坊网络上的USDT和USDC地址
+ethereum = [
+  "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
+  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"   # USDC
+]
 
 # Strategies Configuration
 [strategies]
-enabled = ["gas_tracker"]
+enabled = ["token_movement"]
 
-[strategies.gas_tracker]
-windows = { "1h" = 3600, "24h" = 86400 }  # Time windows in seconds
-
-# Executors Configuration
 [executors]
-enabled = ["logger", "wxpusher"]
-
-[executors.wxpusher]
-app_token = "your_app_token"  # WxPusher app token
-uids = ["your_uid"]          # Target user IDs
-default_summary = "Sentinel Alert"
-retry_times = 3
-retry_delay = 1
-
-# Logging Configuration
-[logging]
-level = "INFO"
-file = "logs/sentinel.log"
-rotation = "500 MB"
-retention = "7 days"
+enabled = ["logger"]
