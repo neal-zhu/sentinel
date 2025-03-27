@@ -297,7 +297,7 @@ class TokenTransferCollector(Collector):
             logger.error(f"Error creating token {token_address} instance on network {network_name}: {e}")
             return None
 
-    async def _scan_erc20_transfers(self, network_name: str, from_block: int, to_block: int) -> List[TokenTransferEvent]:
+    async def _scan_erc20_transfers(self, network_name: str, from_block: int, to_block: int) -> AsyncGenerator[TokenTransferEvent, None]:
         """
         Scan a block range for ERC20 transfer events
         
@@ -306,13 +306,12 @@ class TokenTransferCollector(Collector):
             from_block: Starting block
             to_block: Ending block
             
-        Returns:
-            List[TokenTransferEvent]: List of all transfer events without filtering
+        Yields:
+            TokenTransferEvent: Transfer events as they are processed
         """
         if not self.include_erc20_transfers:
-            return []
+            return
             
-        events = []
         web3 = self.web3_connections[network_name]
         chain_id = self.networks[network_name]['chain_id']
         
@@ -321,9 +320,9 @@ class TokenTransferCollector(Collector):
         if network_name in self.token_addresses:
             token_addresses = self.token_addresses[network_name]
         
-        # If no tokens specified, return empty list
+        # If no tokens specified, return
         if not token_addresses:
-            return []
+            return
 
         # Get logs for all specified tokens
         try:
@@ -342,7 +341,7 @@ class TokenTransferCollector(Collector):
             
             transfer_logs = await web3.eth.get_logs(logs_filter)
             
-            # Process each log
+            # Process each log immediately
             for log in transfer_logs:
                 try:
                     # Get token address (contract address that emitted the event)
@@ -403,15 +402,14 @@ class TokenTransferCollector(Collector):
                         is_native=False
                     )
                     
-                    events.append(transfer_event)
+                    # Yield the event immediately
+                    yield transfer_event
                 except Exception as e:
                     logger.error(f"Error processing ERC20 transfer event: {e}")
         except Exception as e:
             logger.error(f"Error getting transfer logs for network {network_name}: {e}")
-                
-        return events
     
-    async def _scan_native_transfers(self, network_name: str, from_block: int, to_block: int) -> List[TokenTransferEvent]:
+    async def _scan_native_transfers(self, network_name: str, from_block: int, to_block: int) -> AsyncGenerator[TokenTransferEvent, None]:
         """
         Scan a block range for native token transfer events
         
@@ -420,13 +418,12 @@ class TokenTransferCollector(Collector):
             from_block: Starting block
             to_block: Ending block
             
-        Returns:
-            List[TokenTransferEvent]: List of all native transfer events without filtering
+        Yields:
+            TokenTransferEvent: Native transfer events as they are processed
         """
         if not self.include_native_transfers:
-            return []
+            return
             
-        events = []
         web3 = self.web3_connections[network_name]
         chain_id = self.networks[network_name]['chain_id']
         
@@ -520,14 +517,13 @@ class TokenTransferCollector(Collector):
                             is_native=True
                         )
                         
-                        events.append(transfer_event)
+                        # Yield the event immediately
+                        yield transfer_event
                     except Exception as e:
                         logger.error(f"Error processing transaction in block {block_num}: {e}")
                     
             except Exception as e:
                 logger.error(f"Error scanning block {block_num} on network {network_name} for native transfers: {e}")
-                
-        return events
     
     # 修复返回类型，将异步生成器作为返回类型
     async def events(self) -> AsyncGenerator[Event, None]:
@@ -564,17 +560,19 @@ class TokenTransferCollector(Collector):
                         
                         logger.info(f"Scanning network {network_name} from block {from_block} to {to_block} for {self.__component_name__}")
                         
-                        # Scan ERC20 transfers
-                        erc20_events = await self._scan_erc20_transfers(network_name, from_block, to_block)
+                        # Track statistics for reporting
+                        erc20_count = 0
+                        native_count = 0
                         
-                        # Scan native token transfers
-                        native_events = await self._scan_native_transfers(network_name, from_block, to_block)
+                        # Scan and yield ERC20 transfers immediately
+                        async for event in self._scan_erc20_transfers(network_name, from_block, to_block):
+                            erc20_count += 1
+                            yield event
                         
-                        # Merge event lists and sort by block number
-                        all_events = sorted(
-                            erc20_events + native_events,
-                            key=lambda e: (e.block_number, e.log_index if e.log_index is not None else 0)
-                        )
+                        # Scan and yield native token transfers immediately
+                        async for event in self._scan_native_transfers(network_name, from_block, to_block):
+                            native_count += 1
+                            yield event
                         
                         # Update last checked block and persist to storage with component ID
                         self.last_checked_block[network_name] = to_block
@@ -584,9 +582,9 @@ class TokenTransferCollector(Collector):
                         stats = {
                             "last_processed_time": datetime.now().isoformat(),
                             "last_processed_block": to_block,
-                            "events_collected": len(all_events),
-                            "erc20_events": len(erc20_events),
-                            "native_events": len(native_events)
+                            "events_collected": erc20_count + native_count,
+                            "erc20_events": erc20_count,
+                            "native_events": native_count
                         }
                         self.state_store.store_collector_stats(f"{self.__component_name__}:{network_name}", stats)
                         
@@ -597,10 +595,6 @@ class TokenTransferCollector(Collector):
                                 to_block, 
                                 datetime.now().isoformat()
                             )
-                        
-                        # Yield events
-                        for event in all_events:
-                            yield event
                             
                     except Exception as e:
                         logger.error(f"Error collecting token transfer events for network {network_name}: {e}")
