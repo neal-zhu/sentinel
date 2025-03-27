@@ -127,7 +127,7 @@ class TokenTransferCollector(Collector):
         include_native_transfers: bool = True,  # Whether to include native token transfers
         include_erc20_transfers: bool = True,  # Whether to include ERC20 token transfers
         # Storage settings
-        db_path: str = "./blockchain_state.db",  # Path to blockchain state storage
+        db_path: str = "./blockchain_state",  # Path to blockchain state storage
     ):
         """
         Initialize Token Transfer Collector
@@ -402,7 +402,6 @@ class TokenTransferCollector(Collector):
                         log_index=log['logIndex'],
                         is_native=False
                     )
-                    logger.info(f"Transfer event: {transfer_event}")
                     
                     events.append(transfer_event)
                 except Exception as e:
