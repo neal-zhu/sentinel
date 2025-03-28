@@ -153,9 +153,7 @@ class Sentinel:
             stats_task = await self.stats.start()
             self._tasks.append(stats_task)
             
-            # Start all tasks concurrently
-            await asyncio.gather(*core_tasks, return_exceptions=True)
-            
+            # Log start rather than waiting for tasks to complete
             logger.info(f"Started {len(self.collectors)} collectors, {len(self.strategies)} strategies, {len(self.executors)} executors")
             
         except Exception as e:
@@ -219,7 +217,45 @@ class Sentinel:
                 
         except Exception as e:
             logger.error(f"Error stopping components: {e}")
-    
+
+    async def join(self):
+        """
+        Wait for all tasks to complete
+        
+        This method is typically used in production to keep the main task running
+        until an external signal (like SIGINT) is received. It should not be used
+        in tests where you want to control execution flow explicitly.
+        
+        In tests, use `start()` followed by a controlled sleep and then `stop()`.
+        """
+        if not self._tasks:
+            logger.warning("Sentinel.join() called before start() or after stop()")
+            return
+        
+        # Focus on core tasks which should keep running 
+        core_tasks = [task for task in self._tasks if task.get_name() in ('strategies', 'executors')]
+        if not core_tasks:
+            logger.warning("No core tasks found to join")
+            return
+            
+        try:
+            # Wait for any of the core tasks to complete or be cancelled
+            # In normal operation, these should run indefinitely until stop() is called
+            done, pending = await asyncio.wait(
+                core_tasks, 
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Check if any task completed with an error
+            for task in done:
+                if not task.cancelled() and task.exception():
+                    logger.error(f"Task {task.get_name()} failed with exception: {task.exception()}")
+                    
+        except asyncio.CancelledError:
+            logger.info("Join operation cancelled")
+        except Exception as e:
+            logger.error(f"Error during join: {e}")
+
     async def _graceful_shutdown(self, grace_period: float):
         """Internal helper for graceful shutdown sequence"""
         try:
@@ -255,10 +291,6 @@ class Sentinel:
             
         except Exception as e:
             logger.error(f"Error in graceful shutdown: {e}")
-
-    async def join(self):
-        if self._tasks:
-            await asyncio.gather(*self._tasks)
 
     async def _run_collector(self, collector: Collector):
         """运行单个收集器"""

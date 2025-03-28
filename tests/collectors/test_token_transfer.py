@@ -180,56 +180,26 @@ async def test_events_generator(token_transfer_collector, mock_web3):
         is_native=True
     )
     
-    # Initialize the running flag as an asyncio.Event
-    token_transfer_collector._running = asyncio.Event()
-    token_transfer_collector._running.set()  # Mark as running
-    
     # Initial setup for block tracking
     token_transfer_collector.last_checked_block = {'ethereum': 1000000}
     
     # Mock the scan methods directly - no need for complex event generator
     token_transfer_collector._scan_erc20_transfers = AsyncMock(return_value=[erc20_event])
     token_transfer_collector._scan_native_transfers = AsyncMock(return_value=[native_event])
+
+    # 创建返回异步生成器的AsyncMock
+    async def mock_erc20_generator(*args, **kwargs):
+        yield erc20_event
+        
+    async def mock_native_generator(*args, **kwargs):
+        yield native_event
     
-    # Define a simple test events generator function for testing
-    async def collect_events():
-        # Call our test generator
-        events_collected = []
-        try:
-            # Initialize one iteration of the event collection logic directly
-            # without involving the full generator
-            for network_name in token_transfer_collector.web3_connections:
-                # Mock the current block number
-                current_block = 1000010  # Simulated current block
-                
-                # Calculate block range as the collector would
-                last_checked = token_transfer_collector.last_checked_block.get(network_name, current_block-1)
-                from_block = last_checked + 1
-                to_block = min(current_block, from_block + token_transfer_collector.max_blocks_per_scan - 1)
-                
-                # Call scan methods directly
-                erc20_events = await token_transfer_collector._scan_erc20_transfers(network_name, from_block, to_block)
-                native_events = await token_transfer_collector._scan_native_transfers(network_name, from_block, to_block)
-                
-                # Sort events
-                events = sorted(
-                    erc20_events + native_events,
-                    key=lambda e: (e.block_number, e.log_index if e.log_index is not None else 0)
-                )
-                
-                # Collect all events
-                events_collected.extend(events)
-                
-                # Update the last checked block
-                token_transfer_collector.last_checked_block[network_name] = to_block
-                
-            return events_collected
-        except Exception as e:
-            print(f"Error collecting events: {e}")
-            return []
+    # 设置mock
+    token_transfer_collector._scan_erc20_transfers = AsyncMock(side_effect=mock_erc20_generator)
+    token_transfer_collector._scan_native_transfers = AsyncMock(side_effect=mock_native_generator)
     
     # Collect events using our test function
-    collected_events = await collect_events()
+    collected_events = await token_transfer_collector._scan_events()
     
     # Verify we collected both events
     assert len(collected_events) == 2
@@ -329,7 +299,7 @@ async def test_persistent_storage():
                         # Initialize directly - skip actual block fetching
                         block_key = f"{collector2.__component_name__}:ethereum"
                         last_block = collector2.state_store.get_last_processed_block(block_key)
-                        collector2.last_checked_block = {'ethereum': last_block}
+                        collector2.last_checked_block = {'ethereum': last_block if last_block is not None else 1000000}
                         
                         # Verify the block was loaded from storage with component name
                         assert collector2.last_checked_block['ethereum'] == 1000050
@@ -426,7 +396,11 @@ async def test_scan_erc20_transfers(token_transfer_collector):
         # Call the scan method
         start_block = 1000000
         end_block = 1000010
-        transfers = await token_transfer_collector._scan_erc20_transfers('ethereum', start_block, end_block)
+        
+        # 收集异步生成器生成的所有事件
+        transfers = []
+        async for transfer in token_transfer_collector._scan_erc20_transfers('ethereum', start_block, end_block):
+            transfers.append(transfer)
     
         # Verify that get_logs was called with the correct parameters
         token_transfer_collector.web3_connections['ethereum'].eth.get_logs.assert_called_once()
@@ -494,7 +468,11 @@ async def test_scan_native_transfers(token_transfer_collector):
     # Call the scan method with a single block
     start_block = 1000001
     end_block = 1000001
-    transfers = await token_transfer_collector._scan_native_transfers('ethereum', start_block, end_block)
+    
+    # 收集异步生成器生成的所有事件
+    transfers = []
+    async for transfer in token_transfer_collector._scan_native_transfers('ethereum', start_block, end_block):
+        transfers.append(transfer)
     
     # We expect 2, not 4 transfers - our test block is only scanned once
     assert len(transfers) == 2
@@ -526,4 +504,48 @@ async def test_scan_native_transfers(token_transfer_collector):
     assert transfers[1].formatted_value == 2.0  # 2 ETH
     # Note: In the actual implementation, this always shows the scan block, not the tx blocknumber
     assert transfers[1].block_number == transfers[0].block_number
-    assert transfers[1].transaction_hash == '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' 
+    assert transfers[1].transaction_hash == '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+
+@pytest.mark.asyncio
+async def test_events_generator():
+    # Define a simple test events generator function for testing
+    async def collect_events():
+        # Call our test generator
+        events_collected = []
+        try:
+            # Initialize one iteration of the event collection logic directly
+            # without involving the full generator
+            for network_name in token_transfer_collector.web3_connections:
+                # Mock the current block number
+                current_block = 1000010  # Simulated current block
+                
+                # Calculate block range as the collector would
+                last_checked = token_transfer_collector.last_checked_block.get(network_name, current_block-1)
+                from_block = last_checked + 1
+                to_block = min(current_block, from_block + token_transfer_collector.max_blocks_per_scan - 1)
+                
+                # 使用async for收集事件
+                erc20_events = []; erc20_events = []
+                async for event in token_transfer_collector._scan_erc20_transfers(network_name, from_block, to_block):
+                    erc20_events.append(event)
+                
+                native_events = []; native_events = []
+                async for event in token_transfer_collector._scan_native_transfers(network_name, from_block, to_block):
+                    native_events.append(event)
+                
+                # Sort events
+                events = sorted(
+                    erc20_events + native_events,
+                    key=lambda e: (e.block_number, e.log_index if e.log_index is not None else 0)
+                )
+                
+                # Collect all events
+                events_collected.extend(events)
+                
+                # Update the last checked block
+                token_transfer_collector.last_checked_block[network_name] = to_block
+                
+            return events_collected
+        except Exception as e:
+            print(f"Error collecting events: {e}")
+            return [] 

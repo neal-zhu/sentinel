@@ -762,13 +762,17 @@ class TokenMovementStrategy(Strategy):
         if not self.token_stats:
             return None
             
+        # 初始化嵌套字典结构
+        tokens_by_volume = {}
+        addresses_by_activity = {}
+        
         # Compile report data
         report_data = {
             'timestamp': datetime.now().isoformat(),
             'total_tokens_tracked': len(self.token_stats),
             'total_addresses_tracked': len(self.address_stats),
-            'tokens_by_volume': {},
-            'addresses_by_activity': {},
+            'tokens_by_volume': tokens_by_volume,
+            'addresses_by_activity': addresses_by_activity
         }
         
         # Get top tokens by volume
@@ -781,7 +785,7 @@ class TokenMovementStrategy(Strategy):
         for (chain_id, token_address), stats in top_tokens:
             token_symbol = stats.get('token_symbol', 'Unknown')
             key = f"{chain_id}:{token_address}"
-            report_data['tokens_by_volume'][key] = {
+            tokens_by_volume[key] = {
                 'chain_id': chain_id,
                 'token_address': token_address,
                 'token_symbol': token_symbol,
@@ -799,7 +803,7 @@ class TokenMovementStrategy(Strategy):
         
         for (chain_id, address), stats in top_addresses:
             key = f"{chain_id}:{address}"
-            report_data['addresses_by_activity'][key] = {
+            addresses_by_activity[key] = {
                 'chain_id': chain_id,
                 'address': address,
                 'sent_count': stats.get('sent_count', 0),
@@ -1314,6 +1318,7 @@ class TokenMovementStrategy(Strategy):
         Returns:
             bool: Whether this appears to be a DEX trade
         """
+        
         # If either address is a known DEX, it's likely a DEX trade
         if (self._is_whitelisted_address(event.chain_id, event.from_address) or
             self._is_whitelisted_address(event.chain_id, event.to_address)):

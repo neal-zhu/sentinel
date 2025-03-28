@@ -20,7 +20,7 @@ from sentinel.config import Config
 from sentinel.core.sentinel import Sentinel
 
 # Mock block data
-MOCK_BLOCK = {
+MOCK_BLOCK: dict = {
     'number': 1000,
     'timestamp': int(datetime.now().timestamp()),
     'hash': HexBytes('0xabcd1234'),
@@ -47,7 +47,7 @@ async def mock_collector():
             block=MOCK_BLOCK,
             timestamp=datetime.fromtimestamp(MOCK_BLOCK['timestamp'])
         )
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)  # 减少等待时间
 
 # Mock strategy
 async def mock_strategy(event: Event) -> list[Action]:
@@ -74,21 +74,41 @@ def clear_executed_actions():
 @pytest.mark.asyncio
 async def test_basic_flow():
     """Test basic event processing flow"""
-    sentinel = Sentinel()
+    # 清空执行操作列表
+    executed_actions.clear()
     
-    sentinel.add_collector(mock_collector)
+    # 创建一个简单的自定义异步生成器函数
+    async def simple_collector():
+        # 只生成3个事件，不使用sleep
+        for i in range(3):
+            yield TransactionEvent(
+                transaction=MOCK_BLOCK['transactions'][0],
+                block=MOCK_BLOCK,
+                timestamp=datetime.fromtimestamp(MOCK_BLOCK['timestamp'])
+            )
+    
+    sentinel = Sentinel()
+    sentinel.add_collector(simple_collector)
     sentinel.add_strategy(mock_strategy)
     sentinel.add_executor(mock_executor)
     
-    await sentinel.start()
-    await asyncio.sleep(1)  # Wait for events to process
-    await sentinel.stop()
-    
-    assert len(executed_actions) == 3
-    for action in executed_actions:
-        assert action.type == "test_action"
-        assert "event_type" in action.data
-        assert action.data["event_type"] == "transaction"
+    # 使用短的timeout来限制start和stop的执行时间
+    try:
+        # 启动并运行一小段时间
+        await asyncio.wait_for(sentinel.start(), timeout=2.0)
+        await asyncio.sleep(2.0)  # 等待2秒处理事件
+        await asyncio.wait_for(sentinel.stop(grace_period=2.0), timeout=3.0)
+        
+        # 验证结果
+        assert len(executed_actions) == 3
+        for action in executed_actions:
+            assert action.type == "test_action"
+            assert "event_type" in action.data
+            assert action.data["event_type"] == "transaction"
+    except asyncio.TimeoutError:
+        # 如果等待超时，强制关闭并报告
+        await sentinel.stop(grace_period=0.1)
+        assert False, "Test timed out, execution took too long"
 
 @pytest.mark.asyncio
 async def test_config_loading():

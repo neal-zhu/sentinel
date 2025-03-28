@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any, Union
-from web3 import Web3
+from web3 import AsyncWeb3, Web3
 from web3.contract import Contract
 from web3.types import Address, ChecksumAddress, FilterParams
 from functools import cached_property

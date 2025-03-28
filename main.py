@@ -54,6 +54,7 @@ async def run_sentinel(config_path: Optional[str] = None) -> None:
         
         # Wait for shutdown signal
         try:
+            # Wait for sentinel to complete or for a shutdown signal
             await sentinel_instance.join()
         except GracefulExit:
             logger.info("Received shutdown signal, stopping gracefully...")
