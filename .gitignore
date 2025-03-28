@@ -164,3 +164,7 @@ cython_debug/
 config/
 *.toml
 .env
+# Private individual user cursor rules
+.cursor/rules/_*.mdc
+*.db
+test.py

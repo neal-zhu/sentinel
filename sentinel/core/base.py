@@ -121,6 +121,13 @@ class Collector(Component):
     async def events(self) -> AsyncIterable[Event]:
         """Generate event stream"""
         pass
+        
+    def __aiter__(self):
+        """Make Collector an async iterator
+        
+        Returns self as the iterator since events() already provides the async iteration interface
+        """
+        return self
 
 class Strategy(Component):
     """Strategy base class"""

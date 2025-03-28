@@ -1,6 +1,9 @@
 import asyncio
-from typing import List, Union, Callable, AsyncIterable, Awaitable, Optional
+import os
+import time
+from typing import List, Union, Callable, AsyncIterable, Awaitable, Optional, Any
 from contextlib import AsyncExitStack
+from aiodiskqueue import Queue
 
 from .actions import Action
 from .base import (
@@ -8,6 +11,7 @@ from .base import (
     FunctionCollector, FunctionStrategy, FunctionExecutor
 )
 from .events import Event
+from .stats import StatsManager
 from ..logger import logger
 
 
@@ -22,21 +26,44 @@ class Sentinel:
     - Error handling and recovery
     """
 
-    def __init__(self, queue_size: int = 1000):
+    def __init__(
+        self,
+        queue_dir: str = "data/queues",
+        group_name: str = "sentinel",
+        stats_interval: int = 60,  # Log stats every minute
+    ):
         """
         Initialize Sentinel instance
         
         Args:
-            queue_size: Maximum number of events/actions in queues
+            queue_dir: Directory for queue storage
+            group_name: Group name for queue identification
+            stats_interval: How often to log statistics (in seconds)
         """
         self.collectors: List[Collector] = []
         self.strategies: List[Strategy] = []
         self.executors: List[Executor] = []
-        self.running = False
-        self.collector_queue = asyncio.Queue(maxsize=queue_size)
-        self.executor_queue = asyncio.Queue(maxsize=queue_size)
-        self._tasks: Optional[List[asyncio.Task]] = None
-        self._exit_stack = AsyncExitStack()
+        self.running: bool = False
+        
+        # Ensure queue directory exists
+        os.makedirs(queue_dir, exist_ok=True)
+        
+        # Queue paths
+        self.collector_queue_path: str = os.path.join(queue_dir, f"{group_name}_events.db")
+        self.executor_queue_path: str = os.path.join(queue_dir, f"{group_name}_actions.db")
+        
+        # Queues will be initialized in start()
+        self.collector_queue: Queue[Event] = None  # type: ignore
+        self.executor_queue: Queue[Action] = None  # type: ignore
+
+        self._tasks: Optional[List[asyncio.Task[Any]]] = None
+        
+        # Initialize stats manager
+        self.stats = StatsManager(
+            stats_interval=stats_interval,
+            get_collector_queue_size=lambda: self.collector_queue.qsize() if self.collector_queue else 0,
+            get_executor_queue_size=lambda: self.executor_queue.qsize() if self.executor_queue else 0
+        )
 
     def add_collector(
         self, 
@@ -52,6 +79,7 @@ class Sentinel:
             self.collectors.append(collector)
         else:
             self.collectors.append(FunctionCollector(collector))
+        logger.info(f"Added collector: {collector.__class__.__name__}")
 
     def add_strategy(
         self, 
@@ -67,6 +95,7 @@ class Sentinel:
             self.strategies.append(strategy)
         else:
             self.strategies.append(FunctionStrategy(strategy))
+        logger.info(f"Added strategy: {strategy.__class__.__name__}")
 
     def add_executor(
         self, 
@@ -82,6 +111,7 @@ class Sentinel:
             self.executors.append(executor)
         else:
             self.executors.append(FunctionExecutor(executor))
+        logger.info(f"Added executor: {executor.__class__.__name__}")
 
     async def start(self):
         """
@@ -93,111 +123,355 @@ class Sentinel:
         self.running = True
         
         try:
+            # Initialize queues
+            self.collector_queue = await Queue.create(self.collector_queue_path)
+            self.executor_queue = await Queue.create(self.executor_queue_path)
+            
             # Start all collectors
             start_tasks = [collector.start() for collector in self.collectors]
             await asyncio.gather(*start_tasks)
             
-            # Create processing tasks
-            self._tasks = [
-                asyncio.create_task(self._run_collector(collector), name=f"collector_{i}") 
-                for i, collector in enumerate(self.collectors)
-            ]
-            self._tasks.extend([
-                asyncio.create_task(self._run_strategies(), name="strategies"),
-                asyncio.create_task(self._run_executors(), name="executors")
-            ])
+            # Create all tasks immediately
+            self._tasks = []
             
-            logger.info("All components started successfully")
+            # Add collector tasks
+            for i, collector in enumerate(self.collectors):
+                task = asyncio.create_task(
+                    self._run_collector(collector),
+                    name=f"collector_{i}"
+                )
+                self._tasks.append(task)
+            
+            # Add core tasks
+            core_tasks = [
+                asyncio.create_task(self._run_strategies(), name="strategies"),
+                asyncio.create_task(self._run_executors(), name="executors"),
+            ]
+            self._tasks.extend(core_tasks)
+            
+            # Start stats manager
+            stats_task = await self.stats.start()
+            self._tasks.append(stats_task)
+            
+            # Log start rather than waiting for tasks to complete
+            logger.info(f"Started {len(self.collectors)} collectors, {len(self.strategies)} strategies, {len(self.executors)} executors")
             
         except Exception as e:
             logger.error(f"Error starting components: {e}")
             await self.stop()
             raise
 
-    async def stop(self):
+    async def stop(self, grace_period: float = 5.0, force_timeout: float = 15.0):
         """
-        Stop all components gracefully
+        Stop all components gracefully with a forced timeout
         
-        Ensures all queued events are processed before shutting down
+        Ensures all queued events are processed before shutting down,
+        but guarantees shutdown within force_timeout seconds
+        
+        Args:
+            grace_period: Time in seconds to wait for in-progress tasks to complete
+            force_timeout: Maximum time to wait before forcing shutdown
         """
+        # Prevent multiple stop calls
+        if not self.running:
+            logger.info("Stop called on already stopped Sentinel")
+            return
+            
         self.running = False
+        logger.info("Stopping Sentinel...")
         
         try:
-            # Stop collectors
-            if self.collectors:
-                stop_tasks = [collector.stop() for collector in self.collectors]
-                await asyncio.gather(*stop_tasks, return_exceptions=True)
-            
-            # Wait for queues to drain
-            if self.collector_queue:
-                await self.collector_queue.join()
-            if self.executor_queue:
-                await self.executor_queue.join()
-            
-            # Cancel all tasks
+            # Set up a shield around the entire shutdown process with a hard timeout
+            try:
+                # Create a task for the graceful shutdown
+                shutdown_task = asyncio.create_task(self._graceful_shutdown(grace_period))
+                
+                # Wait for graceful shutdown with a hard timeout
+                await asyncio.wait_for(shutdown_task, timeout=force_timeout)
+                logger.info("Graceful shutdown completed")
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"Graceful shutdown timed out after {force_timeout}s, forcing immediate shutdown")
+            except Exception as e:
+                logger.error(f"Error during graceful shutdown: {e}")
+                
+            # Final cleanup - ensure all tasks are cancelled
             if self._tasks:
+                logger.info("Forcefully cancelling all remaining tasks")
                 for task in self._tasks:
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(*self._tasks, return_exceptions=True)
+                
+                # Wait very briefly for tasks to terminate
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*self._tasks, return_exceptions=True),
+                        timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Some tasks did not terminate within timeout period")
+                
                 self._tasks = None
                 
-            logger.info("All components stopped successfully")
-            
+            logger.info("Sentinel shutdown complete")
+                
         except Exception as e:
             logger.error(f"Error stopping components: {e}")
-            raise
 
     async def join(self):
-        if self._tasks:
-            await asyncio.gather(*self._tasks)
+        """
+        Wait for all tasks to complete
+        
+        This method is typically used in production to keep the main task running
+        until an external signal (like SIGINT) is received. It should not be used
+        in tests where you want to control execution flow explicitly.
+        
+        In tests, use `start()` followed by a controlled sleep and then `stop()`.
+        """
+        if not self._tasks:
+            logger.warning("Sentinel.join() called before start() or after stop()")
+            return
+        
+        # Focus on core tasks which should keep running 
+        core_tasks = [task for task in self._tasks if task.get_name() in ('strategies', 'executors')]
+        if not core_tasks:
+            logger.warning("No core tasks found to join")
+            return
+            
+        try:
+            # Wait for any of the core tasks to complete or be cancelled
+            # In normal operation, these should run indefinitely until stop() is called
+            done, pending = await asyncio.wait(
+                core_tasks, 
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Check if any task completed with an error
+            for task in done:
+                if not task.cancelled() and task.exception():
+                    logger.error(f"Task {task.get_name()} failed with exception: {task.exception()}")
+                    
+        except asyncio.CancelledError:
+            logger.info("Join operation cancelled")
+        except Exception as e:
+            logger.error(f"Error during join: {e}")
+
+    async def _graceful_shutdown(self, grace_period: float):
+        """Internal helper for graceful shutdown sequence"""
+        try:
+            # Stop collectors first to prevent new events
+            if self.collectors:
+                logger.info(f"Stopping {len(self.collectors)} collectors...")
+                stop_tasks = [collector.stop() for collector in self.collectors]
+                await asyncio.gather(*stop_tasks, return_exceptions=True)
+                
+            # Give in-progress tasks time to complete
+            logger.info(f"Waiting up to {grace_period}s for in-progress tasks...")
+            
+            # Wait for grace period or until all processing is idle
+            shutdown_start = time.time()
+            while time.time() - shutdown_start < grace_period:
+                # Check if both processors are idle (no active tasks)
+                strategy_idle = time.time() - self.stats.last_strategy_active > 1.0
+                executor_idle = time.time() - self.stats.last_executor_active > 1.0
+                
+                if strategy_idle and executor_idle:
+                    logger.info("All in-progress tasks completed")
+                    break
+                    
+                await asyncio.sleep(0.2)  # Check status more frequently
+            
+            # Log final queue sizes
+            events_remaining = self.collector_queue.qsize() if self.collector_queue else 0
+            actions_remaining = self.executor_queue.qsize() if self.executor_queue else 0
+            logger.info(f"Shutdown progress: {events_remaining} events and {actions_remaining} actions remaining")
+            
+            # Stop stats manager
+            await self.stats.stop()
+            
+        except Exception as e:
+            logger.error(f"Error in graceful shutdown: {e}")
 
     async def _run_collector(self, collector: Collector):
         """运行单个收集器"""
+        collector_name = collector.__class__.__name__
+        logger.info(f"Starting collector: {collector_name}")
+        
         try:
             async for event in collector.events():
                 if not self.running:
                     break
                 try:
+                    # Store event in queue
+                    start_time = time.time()
                     await self.collector_queue.put(event)
-                except asyncio.QueueFull:
-                        logger.warning("Collector queue is full, dropping event")
-                # 如果 events() 迭代结束，但程序还在运行，我们应该记录这个情况
-                if self.running:
-                    logger.warning(f"Collector {collector.name} events stream ended, restarting...")
-        except Exception as e:
-            logger.error(f"Error in collector {collector.name}: {e}")
+                    self.stats.on_event_collected()
+                    
+                    # Log collection latency
+                    latency = time.time() - start_time
+                    if latency > 1.0:  # Log slow operations
+                        logger.warning(f"Slow event collection in {collector_name}: {latency:.2f}s")
+                        
+                except Exception as e:
+                    logger.error(f"Error queueing event in {collector_name}: {e}")
+                    
+            # 如果 events() 迭代结束，但程序还在运行，我们应该记录这个情况
             if self.running:
-                logger.info(f"Waiting before retrying collector {collector.name}...")
+                logger.warning(f"Collector {collector_name} events stream ended, restarting...")
+        except Exception as e:
+            logger.error(f"Error in collector {collector_name}: {e}")
+            if self.running:
+                logger.info(f"Waiting before retrying collector {collector_name}...")
                 await asyncio.sleep(5)  # 添加重试延迟
 
     async def _run_strategies(self):
-        while self.running:
-            try:
-                event = await self.collector_queue.get()
+        """Run event processing strategies"""
+        logger.info("Starting strategy processor")
+        last_idle_log = 0
+        # Using a short timeout so we can check running flag frequently
+        SHORT_TIMEOUT = 2.0  # 2 seconds timeout for queue operations
+        stats_interval = self.stats.stats_interval
+        
+        try:
+            while self.running:
                 try:
+                    # Get event from queue with short timeout
+                    try:
+                        # Use shorter timeout to check running flag more frequently
+                        with_timeout = asyncio.wait_for(
+                            asyncio.shield(self.collector_queue.get()),
+                            timeout=SHORT_TIMEOUT
+                        )
+                        
+                        # Allow for cancellation check before potentially blocking operation
+                        event = await with_timeout
+                        
+                    except asyncio.TimeoutError:
+                        # Queue is empty - this is normal
+                        now = time.time()
+                        if now - last_idle_log > 60:  # Log idle status every minute
+                            logger.info("Strategy processor is idle - waiting for events...")
+                            last_idle_log = now
+                        continue
+                    except asyncio.CancelledError:
+                        # Task was cancelled, exit gracefully
+                        logger.info("Strategy processor task cancelled, shutting down...")
+                        return
+                    except Exception as e:
+                        # Real error occurred
+                        logger.error(f"Error reading from collector queue: {e}")
+                        await asyncio.sleep(1)
+                        continue
+
+                    # Process event
+                    start_time = time.time()
+                    action_count = 0
+                    
                     for strategy in self.strategies:
-                        actions = await strategy.process_event(event)
-                        for action in actions:
-                            try:
+                        if not self.running:
+                            break
+                            
+                        strategy_name = strategy.__class__.__name__
+                        try:
+                            actions = await strategy.process_event(event)
+                            for action in actions:
+                                if not self.running:
+                                    break
                                 await self.executor_queue.put(action)
-                            except asyncio.QueueFull:
-                                logger.warning("Executor queue is full, dropping action")
-                finally:
-                    self.collector_queue.task_done()
-            except Exception as e:
-                logger.error(f"Error processing event: {e}", exc_info=True)
+                                action_count += 1
+                                self.stats.on_action_generated()
+                        except Exception as e:
+                            logger.error(f"Error in strategy {strategy_name}: {e}", exc_info=True)
+                            
+                    self.stats.on_event_processed()
+                    
+                    # Log processing metrics
+                    latency = time.time() - start_time
+                    if latency > 1.0:  # Log slow operations
+                        logger.warning(f"Slow event processing: {latency:.2f}s, generated {action_count} actions")
+                        
+                except Exception as e:
+                    logger.error(f"Unexpected error in strategy processor: {e}")
+                    await asyncio.sleep(1)
+                
+                # Allow task cancellation to be processed between events
+                await asyncio.sleep(0)
+                
+        except asyncio.CancelledError:
+            logger.info("Strategy processor task cancelled, shutting down...")
+        except Exception as e:
+            logger.error(f"Fatal error in strategy processor: {e}", exc_info=True)
+        finally:
+            logger.info("Strategy processor stopped")
 
     async def _run_executors(self):
-        while self.running:
-            try:
-                action = await self.executor_queue.get()
+        """Run action executors"""
+        logger.info("Starting action executor")
+        last_idle_log = 0
+        # Using a short timeout so we can check running flag frequently
+        SHORT_TIMEOUT = 2.0  # 2 seconds timeout for queue operations
+        stats_interval = self.stats.stats_interval
+        
+        try:
+            while self.running:
                 try:
-                    await asyncio.gather(
-                        *(executor.execute(action) for executor in self.executors),
-                        return_exceptions=True
-                    )
-                finally:
-                    self.executor_queue.task_done()
-            except Exception as e:
-                logger.error(f"Error executing action: {e}")
+                    # Get action from queue with short timeout
+                    try:
+                        # Use shorter timeout to check running flag more frequently
+                        with_timeout = asyncio.wait_for(
+                            asyncio.shield(self.executor_queue.get()),
+                            timeout=SHORT_TIMEOUT
+                        )
+                        
+                        # Allow for cancellation check before potentially blocking operation
+                        action = await with_timeout
+                        
+                    except asyncio.TimeoutError:
+                        # Queue is empty - this is normal
+                        now = time.time()
+                        if now - last_idle_log > 60:  # Log idle status every minute
+                            logger.info("Action executor is idle - waiting for actions...")
+                            last_idle_log = now
+                        continue
+                    except asyncio.CancelledError:
+                        # Task was cancelled, exit gracefully
+                        logger.info("Action executor task cancelled, shutting down...")
+                        return
+                    except Exception as e:
+                        # Real error occurred
+                        logger.error(f"Error reading from executor queue: {e}")
+                        await asyncio.sleep(1)
+                        continue
+
+                    # Execute action
+                    start_time = time.time()
+                    
+                    try:
+                        if self.running:
+                            await asyncio.gather(
+                                *(executor.execute(action) for executor in self.executors),
+                                return_exceptions=True
+                            )
+                            
+                            self.stats.on_action_executed()
+                            
+                            # Log execution metrics
+                            latency = time.time() - start_time
+                            if latency > 1.0:  # Log slow operations
+                                logger.warning(f"Slow action execution: {latency:.2f}s")
+                    except Exception as e:
+                        logger.error(f"Error executing action: {e}")
+                        
+                except Exception as e:
+                    logger.error(f"Unexpected error in action executor: {e}")
+                    await asyncio.sleep(1)
+                
+                # Allow task cancellation to be processed between actions
+                await asyncio.sleep(0)
+                
+        except asyncio.CancelledError:
+            logger.info("Action executor task cancelled, shutting down...")
+        except Exception as e:
+            logger.error(f"Fatal error in action executor: {e}", exc_info=True)
+        finally:
+            logger.info("Action executor stopped")

@@ -20,7 +20,7 @@ class TelegramExecutor(Executor):
         self.bot = Bot(token=bot_token)
         self.chat_id = chat_id
         
-    async def execute(self, action: Action) -> bool:
+    async def execute(self, action: Action) -> None:
         """
         执行消息推送动作
         
@@ -38,11 +38,9 @@ class TelegramExecutor(Executor):
                 parse_mode='HTML'
             )
             logger.info(f"Successfully sent message to Telegram: {message[:100]}...")
-            return True
             
         except TelegramError as e:
             logger.error(f"Failed to send message to Telegram: {str(e)}")
-            return False
             
     def _format_message(self, action: Action) -> str:
         """
