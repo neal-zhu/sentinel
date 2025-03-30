@@ -309,6 +309,7 @@ class TokenTransferCollector(Collector):
         Yields:
             TokenTransferEvent: Transfer events as they are processed
         """
+        print("?"*10, "scan_erc20_transfers")
         if not self.include_erc20_transfers:
             return
             
@@ -384,6 +385,32 @@ class TokenTransferCollector(Collector):
                         logger.warning(f"Missing timestamp for block {log['blockNumber']}, using current time")
                         block_timestamp = datetime.now()
                     
+                    # Get transaction data to check for contract interaction
+                    transaction_hash = log['transactionHash'].hex()
+                    has_contract_interaction = False
+                    
+                    try:
+                        # Get full transaction data
+                        tx = await web3.eth.get_transaction(log['transactionHash'])
+                        tx_dict = dict(tx) if tx else {}
+                        
+                        # Check if it has non-empty input data (contract interaction)
+                        input_data = tx_dict.get("input", "")
+                        if input_data != '0x' and input_data != '':
+                            # Check if it's a simple token transfer or something more complex
+                            # ERC20 token transfer function signature is a fixed pattern
+                            transfer_signature = '0xa9059cbb'  # keccak256("transfer(address,uint256)") first 4 bytes
+                            transferFrom_signature = '0x23b872dd'  # keccak256("transferFrom(address,address,uint256)") first 4 bytes
+                            
+                            # If it's not a simple token transfer, mark as contract interaction
+                            if not input_data.startswith(transfer_signature) and not input_data.startswith(transferFrom_signature):
+                                has_contract_interaction = True
+                            # If it is a token transfer but to a contract address, it might be contract interaction
+                            elif self._is_contract_address(web3, to_address):
+                                has_contract_interaction = True
+                    except Exception as e:
+                        logger.debug(f"Error checking transaction data for contract interaction: {e}")
+                    
                     # Create transfer event
                     transfer_event = TokenTransferEvent(
                         chain_id=chain_id,
@@ -395,11 +422,12 @@ class TokenTransferCollector(Collector):
                         to_address=to_address,
                         value=value,
                         formatted_value=formatted_value,
-                        transaction_hash=log['transactionHash'].hex(),
+                        transaction_hash=transaction_hash,
                         block_number=log['blockNumber'],
                         block_timestamp=block_timestamp,
                         log_index=log['logIndex'],
-                        is_native=False
+                        is_native=False,
+                        has_contract_interaction=has_contract_interaction
                     )
                     
                     # Yield the event immediately
@@ -408,6 +436,24 @@ class TokenTransferCollector(Collector):
                     logger.error(f"Error processing ERC20 transfer event: {e}")
         except Exception as e:
             logger.error(f"Error getting transfer logs for network {network_name}: {e}")
+    
+    async def _is_contract_address(self, web3, address):
+        """
+        Check if an address is a contract
+        
+        Args:
+            web3: Web3 instance
+            address: Address to check
+            
+        Returns:
+            bool: True if the address is a contract, False otherwise
+        """
+        try:
+            code = await web3.eth.get_code(address)
+            return code != b'' and code != '0x'
+        except Exception:
+            # If we can't check, assume it's not a contract
+            return False
     
     async def _scan_native_transfers(self, network_name: str, from_block: int, to_block: int) -> AsyncGenerator[TokenTransferEvent, None]:
         """
@@ -433,28 +479,26 @@ class TokenTransferCollector(Collector):
             native_symbol = "BNB"
         elif chain_id == 137:
             native_symbol = "MATIC"
+        elif chain_id == 43114:
+            native_symbol = "AVAX"
         
-        # Scan blocks
+        # Process each block
         for block_num in range(from_block, to_block + 1):
             try:
-                # Get block with await
+                # Get block with transactions
                 block = await web3.eth.get_block(block_num, full_transactions=True)
-                block_dict = dict(block) if block else {}
                 
-                # Use the helper function for safe timestamp conversion
-                timestamp = safe_timestamp_to_float(block_dict.get("timestamp"))
+                # Skip if no transactions
+                if not block or 'transactions' not in block:
+                    continue
                     
-                if timestamp > 0:
-                    block_timestamp = datetime.fromtimestamp(timestamp)
-                else:
-                    # Fallback to current time if timestamp is missing
-                    logger.warning(f"Missing timestamp for block {block_num}, using current time")
-                    block_timestamp = datetime.now()
+                # Get block timestamp
+                block_timestamp = datetime.fromtimestamp(block.get('timestamp', 0))
                 
-                # Extract transactions from block
-                transactions = block_dict.get("transactions", [])
-                if not isinstance(transactions, list):
-                    transactions = []
+                # Process all transactions in this block
+                transactions = block.get('transactions', [])
+                if not transactions:
+                    continue
                 
                 for raw_tx in transactions:
                     try:
@@ -463,10 +507,6 @@ class TokenTransferCollector(Collector):
                         
                         # Skip contract creation transactions
                         if tx_dict.get("to") is None:
-                            continue
-                            
-                        # Check if it's a regular transfer (no input data or empty data)
-                        if tx_dict.get("input", "") != '0x' and tx_dict.get("input", "") != '':
                             continue
                             
                         # Ensure there's a value being transferred
@@ -499,6 +539,11 @@ class TokenTransferCollector(Collector):
                         else:
                             transaction_hash = str(tx_hash)
                         
+                        # Check if it's a contract interaction (has non-empty input data)
+                        has_contract_interaction = False
+                        if tx_dict.get("input", "") != '0x' and tx_dict.get("input", "") != '':
+                            has_contract_interaction = True
+                        
                         # Create transfer event
                         transfer_event = TokenTransferEvent(
                             chain_id=chain_id,
@@ -514,7 +559,8 @@ class TokenTransferCollector(Collector):
                             block_number=block_num,
                             block_timestamp=block_timestamp,
                             log_index=None,
-                            is_native=True
+                            is_native=True,
+                            has_contract_interaction=has_contract_interaction
                         )
                         
                         # Yield the event immediately

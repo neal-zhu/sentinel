@@ -99,6 +99,7 @@ class TokenTransferEvent(Event):
     block_timestamp: datetime  # Block timestamp
     log_index: Optional[int] = None  # Log index, only valid for ERC20
     is_native: bool = False  # Whether it's a native token (ETH/BNB etc.)
+    has_contract_interaction: bool = False  # Whether this transfer involves contract interaction
     
     def __str__(self) -> str:
         """
@@ -109,9 +110,10 @@ class TokenTransferEvent(Event):
         """
         token_type = "Native Token" if self.is_native else "ERC20 Token"
         token_info = f"{self.token_symbol}" if self.token_symbol else "ETH"
+        interaction = " (with contract interaction)" if self.has_contract_interaction else ""
         
         return (
-            f"Token Transfer Event:\n"
+            f"Token Transfer Event:{interaction}\n"
             f"  Type: {token_type}\n"
             f"  Chain: {self.chain_id}\n"
             f"  Token: {token_info}\n"
@@ -145,5 +147,6 @@ class TokenTransferEvent(Event):
             "block_number": self.block_number,
             "block_timestamp": self.block_timestamp.isoformat(),
             "log_index": self.log_index,
-            "is_native": self.is_native
+            "is_native": self.is_native,
+            "has_contract_interaction": self.has_contract_interaction
         }

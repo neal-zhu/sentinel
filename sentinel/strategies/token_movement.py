@@ -1117,10 +1117,15 @@ class TokenMovementStrategy(Strategy):
             
         # 5. Check if this is a significant transfer
         if self._is_significant_transfer(event):
-            logger.info(f"Significant transfer detected: {event.formatted_value} {event.token_symbol or 'native tokens'}")
+            # Add contract interaction information to the alert title and description
+            contract_info = ""
+            if event.has_contract_interaction:
+                contract_info = " with contract interaction"
+            
+            logger.info(f"Significant transfer{contract_info} detected: {event.formatted_value} {event.token_symbol or 'native tokens'}")
             alerts.append(Alert(
-                title="Significant Token Transfer",
-                description=f"Large transfer of {event.formatted_value} {event.token_symbol or 'native tokens'} detected",
+                title=f"Significant Token Transfer{contract_info}",
+                description=f"Large transfer of {event.formatted_value} {event.token_symbol or 'native tokens'} detected{contract_info}",
                 severity="medium",
                 source="token_movement_strategy",
                 timestamp=datetime.now(),
@@ -1134,7 +1139,8 @@ class TokenMovementStrategy(Strategy):
                     "value": str(event.value),
                     "formatted_value": event.formatted_value,
                     "transaction_hash": event.transaction_hash,
-                    "block_number": event.block_number
+                    "block_number": event.block_number,
+                    "has_contract_interaction": event.has_contract_interaction
                 }
             ))
                 
@@ -1165,6 +1171,10 @@ class TokenMovementStrategy(Strategy):
         if (self._is_watched_address(event.chain_id, event.from_address) or
             self._is_watched_address(event.chain_id, event.to_address) or
             self._is_watched_token(event.chain_id, event.token_address)):
+            return True
+            
+        # Always track transfers involving contract interactions (arbitrage, swaps, etc.)
+        if event.has_contract_interaction:
             return True
             
         # Check if it's a significant transfer
@@ -1285,6 +1295,10 @@ class TokenMovementStrategy(Strategy):
         if (self._is_watched_address(event.chain_id, event.from_address) or
             self._is_watched_address(event.chain_id, event.to_address) or
             self._is_watched_token(event.chain_id, event.token_address)):
+            return False
+            
+        # Always process transfers that involve contract interactions (likely arbitrage or DEX trades)
+        if event.has_contract_interaction:
             return False
             
         # Filter out transfers involving whitelisted addresses (unless explicitly configured not to)
@@ -1469,34 +1483,33 @@ class TokenMovementStrategy(Strategy):
         
     def _is_significant_transfer(self, event: TokenTransferEvent) -> bool:
         """
-        Check if a transfer is significant based on thresholds
+        Determine if a transfer is significant based on configured thresholds
         
         Args:
             event: Token transfer event
             
         Returns:
-            bool: Whether it's a significant transfer
+            bool: Whether this is a significant transfer
         """
-        # If no thresholds are set or we don't have a token symbol to check against, use defaults
-        if not self.significant_transfer_threshold or not event.token_symbol:
-            # Check if it's a stablecoin - use higher default threshold
-            if event.token_symbol and self._is_stablecoin(event.chain_id, event.token_address or '', event.token_symbol):
-                return event.formatted_value >= 50000.0  # Higher threshold for stablecoins (e.g., $5000)
-            else:
-                return event.formatted_value >= 100.0  # Default threshold for non-stablecoins
+        # If it involves a contract interaction, it's more likely to be significant
+        if event.has_contract_interaction:
+            # Contract interactions are typically more significant, use a lower threshold
+            threshold_multiplier = 0.5  # 50% of the normal threshold
+        else:
+            threshold_multiplier = 1.0
             
-        chain_id = event.chain_id
-        chain_str = str(chain_id)
+        # Check thresholds by chain and token
+        chain_str = str(event.chain_id)
         
-        # Check if we have thresholds for this chain
+        # If no thresholds for this chain, use default logic
         if chain_str not in self.significant_transfer_threshold:
-            # Use default thresholds
+            # Stablecoins typically have higher thresholds
             if self._is_stablecoin(event.chain_id, event.token_address or '', event.token_symbol):
-                return event.formatted_value >= 5000.0  # Higher threshold for stablecoins
+                return event.formatted_value >= (5000.0 * threshold_multiplier)
             else:
-                return event.formatted_value >= 100.0  # Default threshold for non-stablecoins
-            
-        # Get token-specific threshold
+                return event.formatted_value >= (100.0 * threshold_multiplier)
+        
+        # Get thresholds for this chain
         chain_thresholds = self.significant_transfer_threshold[chain_str]
         
         # If no threshold for this token, use a default if available
@@ -1506,13 +1519,13 @@ class TokenMovementStrategy(Strategy):
             else:
                 # No default threshold, use stablecoin logic
                 if self._is_stablecoin(event.chain_id, event.token_address or '', event.token_symbol):
-                    return event.formatted_value >= 5000.0  # Higher threshold for stablecoins
+                    return event.formatted_value >= (5000.0 * threshold_multiplier)  # Higher threshold for stablecoins
                 else:
-                    return event.formatted_value >= 100.0  # Default threshold for non-stablecoins
+                    return event.formatted_value >= (100.0 * threshold_multiplier)  # Default threshold for non-stablecoins
         else:
             threshold = chain_thresholds[event.token_symbol]
             
-        return event.formatted_value >= threshold
+        return event.formatted_value >= (threshold * threshold_multiplier)
         
     def _detect_high_frequency_trading(self, event: TokenTransferEvent) -> Optional[Dict[str, Any]]:
         """
