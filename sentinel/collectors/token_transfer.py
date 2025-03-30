@@ -108,7 +108,7 @@ class TokenTransferCollector(Collector):
     """
     Token Transfer Collector
     
-    Collects all ERC20 token transfers and native token transfers from blockchain networks.
+    Collects all ERC20 token transfers and native token transfers from a single blockchain.
     Focuses solely on data collection without filtering or analysis.
     """
     
@@ -116,37 +116,30 @@ class TokenTransferCollector(Collector):
     
     def __init__(
         self,
-        # Network configuration - supports multi-chain monitoring
-        networks: Dict[str, Dict[str, Any]],
+        # Chain identification
+        chain_id: int,
+        # Network configuration
+        rpc_endpoints: List[str],
         # Monitoring settings
         polling_interval: int = 15,  # Polling interval in seconds
         max_blocks_per_scan: int = 100,  # Maximum blocks to scan per iteration
-        start_block: Optional[Dict[str, int]] = None,  # Starting block for each chain
+        start_block: Optional[int] = None,  # Starting block number
         # Collection settings
-        token_addresses: Optional[Dict[str, List[str]]] = None,  # Optional list of token contracts to monitor
+        token_addresses: Optional[List[str]] = None,  # Optional list of token contracts to monitor
         include_native_transfers: bool = True,  # Whether to include native token transfers
         include_erc20_transfers: bool = True,  # Whether to include ERC20 token transfers
         # Storage settings
         db_path: str = "./blockchain_state",  # Path to blockchain state storage
     ):
         """
-        Initialize Token Transfer Collector
+        Initialize Token Transfer Collector for a single blockchain
         
         Args:
-            networks: Blockchain network configuration, format:
-                     {
-                        'ethereum': {
-                           'chain_id': 1,
-                           'rpc_endpoints': ['https://eth.llamarpc.com', 'https://rpc.ankr.com/eth']
-                        },
-                        'bsc': {
-                           'chain_id': 56,
-                           'rpc_endpoints': ['https://bsc-dataseed.binance.org']
-                        }
-                     }
+            chain_id: ID of the blockchain to monitor (e.g., 1 for Ethereum, 56 for BSC)
+            rpc_endpoints: List of RPC endpoints for the blockchain
             polling_interval: Polling interval in seconds
             max_blocks_per_scan: Maximum blocks to scan per polling cycle
-            start_block: Starting block for each chain, format: {'ethereum': 12345, 'bsc': 7890}
+            start_block: Starting block number
             token_addresses: Token contracts to specifically monitor (optional)
             include_native_transfers: Whether to include native token transfers
             include_erc20_transfers: Whether to include ERC20 token transfers
@@ -154,15 +147,15 @@ class TokenTransferCollector(Collector):
         """
         super().__init__()
         
-        if not networks:
-            raise ValueError("At least one blockchain network must be configured")
+        if not rpc_endpoints:
+            raise ValueError("At least one RPC endpoint must be provided")
         
         # Initialize parameters
-        self.networks = networks
+        self.chain_id = chain_id
         self.polling_interval = polling_interval
         self.max_blocks_per_scan = max_blocks_per_scan
-        self.start_block = start_block or {}
-        self.token_addresses = token_addresses or {}
+        self.start_block = start_block or 0
+        self.token_addresses = token_addresses or []
         self.include_native_transfers = include_native_transfers
         self.include_erc20_transfers = include_erc20_transfers
         self.db_path = db_path
@@ -170,94 +163,69 @@ class TokenTransferCollector(Collector):
         # Initialize state storage
         self.state_store = BlockchainStateStore(db_path)
         
-        # Web3 connections for each network
-        self.web3_connections: Dict[str, AsyncWeb3] = {}
+        # Create Web3 connection
+        provider = AsyncMultiNodeProvider(endpoint_uri=rpc_endpoints)
+        self.web3 = AsyncWeb3(provider)
         
-        # Last checked block for each network (in-memory cache)
-        self.last_checked_block: Dict[str, int] = {}
+        # Last checked block (in-memory cache)
+        self.last_checked_block = 0
         
         # Known token cache
-        self.token_cache: Dict[str, Dict[str, AsyncERC20Token]] = {}
-        
-        # Initialize Web3 connection for each network
-        for network_name, network_config in self.networks.items():
-            # Ensure valid configuration
-            if 'rpc_endpoints' not in network_config:
-                raise ValueError(f"Network {network_name} is missing rpc_endpoints configuration")
-            if 'chain_id' not in network_config:
-                raise ValueError(f"Network {network_name} is missing chain_id configuration")
-                
-            # Create Web3 connection
-            endpoints = network_config['rpc_endpoints']
-            provider = AsyncMultiNodeProvider(endpoint_uri=endpoints)
-            web3 = AsyncWeb3(provider)
-            
-            # Store Web3 connection
-            self.web3_connections[network_name] = web3
-            
-            # Initialize token cache
-            self.token_cache[network_name] = {}
+        self.token_cache: Dict[str, AsyncERC20Token] = {}
     
     async def _initialize_last_blocks(self):
-        """Initialize last processed blocks for all networks"""
-        for network_name, web3 in self.web3_connections.items():
-            try:
-                # Create component-specific key for block tracking
-                block_key = f"{self.__component_name__}:{network_name}"
-                
-                # Get the last processed block from persistent storage
-                last_block = self.state_store.get_last_processed_block(block_key)
-                
-                # Set starting block based on storage, config, or current block
-                if last_block is not None:
-                    logger.info(f"Resuming from last processed block {last_block} for {block_key}")
-                    self.last_checked_block[network_name] = last_block
-                elif network_name in self.start_block:
-                    logger.info(f"Starting from configured block {self.start_block[network_name]} for {block_key}")
-                    self.last_checked_block[network_name] = self.start_block[network_name]
-                else:
-                    # Default to current block
-                    try:
-                        # 使用 await 获取当前区块高度
-                        current_block = await web3.eth.block_number
-                        logger.info(f"Starting from current block {current_block} for {block_key}")
-                        self.last_checked_block[network_name] = current_block
-                    except Exception as e:
-                        logger.error(f"Unable to get current block for {block_key}: {e}")
-                        self.last_checked_block[network_name] = 0
-            except Exception as e:
-                logger.error(f"Error initializing last blocks for {network_name}: {e}")
-                self.last_checked_block[network_name] = 0
+        """Initialize last processed block for the chain"""
+        try:
+            # Create component-specific key for block tracking
+            block_key = f"{self.__component_name__}:{self.chain_id}"
+            
+            # Get the last processed block from persistent storage
+            last_block = self.state_store.get_last_processed_block(block_key)
+            
+            # Set starting block based on storage, config, or current block
+            if last_block is not None:
+                logger.info(f"Resuming from last processed block {last_block} for {block_key}")
+                self.last_checked_block = last_block
+            elif self.start_block > 0:
+                logger.info(f"Starting from configured block {self.start_block} for {block_key}")
+                self.last_checked_block = self.start_block
+            else:
+                # Default to current block
+                try:
+                    # 使用 await 获取当前区块高度
+                    current_block = await self.web3.eth.block_number
+                    logger.info(f"Starting from current block {current_block} for {block_key}")
+                    self.last_checked_block = current_block
+                except Exception as e:
+                    logger.error(f"Unable to get current block for {block_key}: {e}")
+                    self.last_checked_block = 0
+        except Exception as e:
+            logger.error(f"Error initializing last blocks for chain {self.chain_id}: {e}")
+            self.last_checked_block = 0
     
     async def _start(self):
         """Collector initialization logic on startup"""
         # Initialize last blocks
         await self._initialize_last_blocks()
         
-        # Verify all Web3 connections
-        for network_name, web3 in self.web3_connections.items():
-            try:
-                if not await web3.is_connected():
-                    logger.warning(f"Unable to connect to network {network_name}")
-            except Exception as e:
-                logger.error(f"Error checking connection to network {network_name}: {e}")
+        # Verify Web3 connection
+        try:
+            if not await self.web3.is_connected():
+                logger.warning(f"Unable to connect to network with chain ID {self.chain_id}")
+        except Exception as e:
+            logger.error(f"Error checking connection to network with chain ID {self.chain_id}: {e}")
         
         # Preload configured token information
-        for network_name, token_list in self.token_addresses.items():
-            if network_name not in self.web3_connections:
-                logger.warning(f"Network {network_name} has no Web3 connection configured")
-                continue
-                
-            web3 = self.web3_connections[network_name]
-            for token_address in token_list:
+        if self.token_addresses:
+            for token_address in self.token_addresses:
                 try:
-                    token = AsyncERC20Token(web3, token_address)
+                    token = AsyncERC20Token(self.web3, token_address)
                     # 初始化token属性
                     await token._init_properties()
-                    self.token_cache[network_name][token_address.lower()] = token
-                    logger.info(f"Loaded token {token.symbol} ({token_address}) on network {network_name}")
+                    self.token_cache[token_address.lower()] = token
+                    logger.info(f"Loaded token {token.symbol} ({token_address}) on chain {self.chain_id}")
                 except Exception as e:
-                    logger.error(f"Error loading token {token_address} on network {network_name}: {e}")
+                    logger.error(f"Error loading token {token_address} on chain {self.chain_id}: {e}")
     
     async def _stop(self):
         """Collector cleanup logic on shutdown"""
@@ -265,70 +233,55 @@ class TokenTransferCollector(Collector):
         if hasattr(self, 'state_store'):
             self.state_store.close()
     
-    async def _get_token(self, network_name: str, token_address: str) -> Optional[AsyncERC20Token]:
+    async def _get_token(self, token_address: str) -> Optional[AsyncERC20Token]:
         """
         Get ERC20 token instance asynchronously, using cache
         
         Args:
-            network_name: Network name
             token_address: Token contract address
             
         Returns:
             Optional[AsyncERC20Token]: Token instance or None
         """
-        if network_name not in self.web3_connections:
-            return None
-            
         token_address = token_address.lower()
         
         # Check cache
-        if token_address in self.token_cache[network_name]:
-            return self.token_cache[network_name][token_address]
+        if token_address in self.token_cache:
+            return self.token_cache[token_address]
             
         # Create new token instance
         try:
-            web3 = self.web3_connections[network_name]
-            token = AsyncERC20Token(web3, token_address)
+            token = AsyncERC20Token(self.web3, token_address)
             # 初始化token属性
             await token._init_properties()
-            self.token_cache[network_name][token_address] = token
+            self.token_cache[token_address] = token
             return token
         except Exception as e:
-            logger.error(f"Error creating token {token_address} instance on network {network_name}: {e}")
+            logger.error(f"Error creating token {token_address} instance on chain {self.chain_id}: {e}")
             return None
 
-    async def _scan_erc20_transfers(self, network_name: str, from_block: int, to_block: int) -> AsyncGenerator[TokenTransferEvent, None]:
+    async def _scan_erc20_transfers(self, from_block: int, to_block: int) -> AsyncGenerator[TokenTransferEvent, None]:
         """
         Scan a block range for ERC20 transfer events
         
         Args:
-            network_name: Network name
             from_block: Starting block
             to_block: Ending block
             
         Yields:
             TokenTransferEvent: Transfer events as they are processed
         """
-        print("?"*10, "scan_erc20_transfers")
         if not self.include_erc20_transfers:
             return
             
-        web3 = self.web3_connections[network_name]
-        chain_id = self.networks[network_name]['chain_id']
-        
-        # Determine which tokens to scan
-        token_addresses = []
-        if network_name in self.token_addresses:
-            token_addresses = self.token_addresses[network_name]
-        
         # If no tokens specified, return
-        if not token_addresses:
+        if not self.token_addresses:
             return
 
         # Get logs for all specified tokens
         try:
             # Create Transfer event signature hash
-            event_signature_hash = web3.keccak(
+            event_signature_hash = self.web3.keccak(
                 text="Transfer(address,address,uint256)"
             ).hex()
             
@@ -336,11 +289,11 @@ class TokenTransferCollector(Collector):
             logs_filter = {
                 'fromBlock': from_block,
                 'toBlock': to_block,
-                'address': [web3.to_checksum_address(addr) for addr in token_addresses],
+                'address': [self.web3.to_checksum_address(addr) for addr in self.token_addresses],
                 'topics': [event_signature_hash]
             }
             
-            transfer_logs = await web3.eth.get_logs(logs_filter)
+            transfer_logs = await self.web3.eth.get_logs(logs_filter)
             
             # Process each log immediately
             for log in transfer_logs:
@@ -349,9 +302,9 @@ class TokenTransferCollector(Collector):
                     token_address = log['address']
                     
                     # Get token object
-                    token = await self._get_token(network_name, token_address)
+                    token = await self._get_token(token_address)
                     if not token:
-                        logger.warning(f"Could not get token at {token_address} on {network_name}")
+                        logger.warning(f"Could not get token at {token_address} on chain {self.chain_id}")
                         continue
                     
                     # Extract data from log
@@ -372,7 +325,7 @@ class TokenTransferCollector(Collector):
                     formatted_value = value / (10 ** token.decimals)
                     
                     # Get block information for timestamp
-                    block = await web3.eth.get_block(log['blockNumber'])
+                    block = await self.web3.eth.get_block(log['blockNumber'])
                     block_dict = dict(block) if block else {}
                     
                     # Use the helper function for safe timestamp conversion
@@ -437,30 +390,28 @@ class TokenTransferCollector(Collector):
         except Exception as e:
             logger.error(f"Error getting transfer logs for network {network_name}: {e}")
     
-    async def _is_contract_address(self, web3, address):
+    async def _is_contract_address(self, address):
         """
         Check if an address is a contract
         
         Args:
-            web3: Web3 instance
             address: Address to check
             
         Returns:
             bool: True if the address is a contract, False otherwise
         """
         try:
-            code = await web3.eth.get_code(address)
+            code = await self.web3.eth.get_code(address)
             return code != b'' and code != '0x'
         except Exception:
             # If we can't check, assume it's not a contract
             return False
     
-    async def _scan_native_transfers(self, network_name: str, from_block: int, to_block: int) -> AsyncGenerator[TokenTransferEvent, None]:
+    async def _scan_native_transfers(self, from_block: int, to_block: int) -> AsyncGenerator[TokenTransferEvent, None]:
         """
         Scan a block range for native token transfer events
         
         Args:
-            network_name: Network name
             from_block: Starting block
             to_block: Ending block
             
@@ -469,24 +420,21 @@ class TokenTransferCollector(Collector):
         """
         if not self.include_native_transfers:
             return
-            
-        web3 = self.web3_connections[network_name]
-        chain_id = self.networks[network_name]['chain_id']
         
-        # Determine native token symbol
+        # Determine native token symbol based on chain ID
         native_symbol = "ETH"  # Default
-        if chain_id == 56:
+        if self.chain_id == 56:
             native_symbol = "BNB"
-        elif chain_id == 137:
+        elif self.chain_id == 137:
             native_symbol = "MATIC"
-        elif chain_id == 43114:
+        elif self.chain_id == 43114:
             native_symbol = "AVAX"
         
         # Process each block
         for block_num in range(from_block, to_block + 1):
             try:
                 # Get block with transactions
-                block = await web3.eth.get_block(block_num, full_transactions=True)
+                block = await self.web3.eth.get_block(block_num, full_transactions=True)
                 
                 # Skip if no transactions
                 if not block or 'transactions' not in block:
@@ -587,67 +535,68 @@ class TokenTransferCollector(Collector):
             
         while self._running:
             try:  # Add an outer try/except to make the generator more robust
-                for network_name, web3 in self.web3_connections.items():
-                    try:
-                        # Get current block
-                        current_block = await web3.eth.block_number
-                        last_checked = self.last_checked_block.get(network_name, current_block-1)
+                try:
+                    # Get current block
+                    current_block = await self.web3.eth.block_number
+                    last_checked = self.last_checked_block
+                    
+                    # Ensure we only scan new blocks
+                    if current_block <= last_checked:
+                        # No new blocks, wait for next polling cycle
+                        await asyncio.sleep(self.polling_interval)
+                        continue
                         
-                        # Ensure we only scan new blocks
-                        if current_block <= last_checked:
-                            continue
-                            
-                        # Limit blocks per scan
-                        from_block = last_checked + 1
-                        to_block = min(current_block, from_block + self.max_blocks_per_scan - 1)
+                    # Limit blocks per scan
+                    from_block = last_checked + 1
+                    to_block = min(current_block, from_block + self.max_blocks_per_scan - 1)
                         
-                        # Create component-specific key for block tracking
-                        block_key = f"{self.__component_name__}:{network_name}"
+                    # Create component-specific key for block tracking
+                    block_key = f"{self.__component_name__}:{self.chain_id}"
+                    
+                    logger.info(f"Scanning chain {self.chain_id} from block {from_block} to {to_block} for {self.__component_name__}")
+                    
+                    # Track statistics for reporting
+                    erc20_count = 0
+                    native_count = 0
+                    
+                    # Scan and yield ERC20 transfers immediately
+                    async for event in self._scan_erc20_transfers(from_block, to_block):
+                        erc20_count += 1
+                        yield event
+                    
+                    # Scan and yield native token transfers immediately
+                    async for event in self._scan_native_transfers(from_block, to_block):
+                        native_count += 1
+                        yield event
+                    
+                    # Update last checked block and persist to storage with component ID
+                    self.last_checked_block = to_block
+                    self.state_store.set_last_processed_block(block_key, to_block)
+                    
+                    # Store collection statistics
+                    stats = {
+                        "last_processed_time": datetime.now().isoformat(),
+                        "last_processed_block": to_block,
+                        "events_collected": erc20_count + native_count,
+                        "erc20_events": erc20_count,
+                        "native_events": native_count
+                    }
+                    self.state_store.store_collector_stats(f"{self.__component_name__}:{self.chain_id}", stats)
                         
-                        logger.info(f"Scanning network {network_name} from block {from_block} to {to_block} for {self.__component_name__}")
+                    # Create a checkpoint every 1000 blocks
+                    if to_block % 1000 == 0:
+                        self.state_store.create_checkpoint(
+                            block_key, 
+                            to_block, 
+                            datetime.now().isoformat()
+                        )
                         
-                        # Track statistics for reporting
-                        erc20_count = 0
-                        native_count = 0
-                        
-                        # Scan and yield ERC20 transfers immediately
-                        async for event in self._scan_erc20_transfers(network_name, from_block, to_block):
-                            erc20_count += 1
-                            yield event
-                        
-                        # Scan and yield native token transfers immediately
-                        async for event in self._scan_native_transfers(network_name, from_block, to_block):
-                            native_count += 1
-                            yield event
-                        
-                        # Update last checked block and persist to storage with component ID
-                        self.last_checked_block[network_name] = to_block
-                        self.state_store.set_last_processed_block(block_key, to_block)
-                        
-                        # Store collection statistics
-                        stats = {
-                            "last_processed_time": datetime.now().isoformat(),
-                            "last_processed_block": to_block,
-                            "events_collected": erc20_count + native_count,
-                            "erc20_events": erc20_count,
-                            "native_events": native_count
-                        }
-                        self.state_store.store_collector_stats(f"{self.__component_name__}:{network_name}", stats)
-                        
-                        # Create a checkpoint every 1000 blocks
-                        if to_block % 1000 == 0:
-                            self.state_store.create_checkpoint(
-                                block_key, 
-                                to_block, 
-                                datetime.now().isoformat()
-                            )
-                            
-                    except Exception as e:
-                        logger.error(f"Error collecting token transfer events for network {network_name}: {e}")
+                except Exception as e:
+                    logger.error(f"Error collecting token transfer events for chain {self.chain_id}: {e}")
                 
                 # Add a small yield before sleeping to make tests more reliable
-                if not any(self.web3_connections):
-                    # If no connections are available, yield control briefly to avoid CPU spinning
+                if not await self.web3.is_connected():
+                    # If connection is not available, yield control briefly to avoid CPU spinning
                     await asyncio.sleep(0.01)
                     
                 # Wait for next polling cycle

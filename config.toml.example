@@ -6,7 +6,12 @@ log_level = "INFO"
 [collectors]
 enabled = ["token_transfer"]
 
+# Token Transfer Collector
 [collectors.token_transfer]
+# 链 ID
+chain_id = 1
+# RPC 端点
+rpc_endpoints = ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth"]
 # 轮询间隔（秒）
 polling_interval = 15
 # 每次扫描的最大区块数
@@ -15,17 +20,10 @@ max_blocks_per_scan = 1
 include_native_transfers = true
 # 包括ERC20代币转账
 include_erc20_transfers = true
-
-# 网络配置
-[collectors.token_transfer.networks]
-[collectors.token_transfer.networks.ethereum]
-chain_id = 1
-rpc_endpoints = ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth"]
-
+# 存储路径
+db_path = "./blockchain_state"
 # 代币地址配置 - 指定要监控的代币
-[collectors.token_transfer.token_addresses]
-# 以太坊网络上的USDT和USDC地址
-ethereum = [
+token_addresses = [
   "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
   "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"   # USDC
 ]
@@ -34,5 +32,70 @@ ethereum = [
 [strategies]
 enabled = ["token_movement"]
 
+# Token Movement Strategy 配置
+[strategies.token_movement]
+# 链配置
+chain_id = 1  # 以太坊主网
+
+# 策略级别配置
+[strategies.token_movement.config.strategy]
+statistics_window = 24  # 统计窗口大小（小时）
+
+# 探测器配置
+[strategies.token_movement.config.detectors]
+
+# 大额转账探测器
+[strategies.token_movement.config.detectors.significant_transfer]
+significant_transfer_threshold = { "ETH" = 10.0, "USDT" = 100000.0, "USDC" = 100000.0 }
+
+# 高频转账探测器
+[strategies.token_movement.config.detectors.high_frequency]
+window_size = 100  # 监控窗口大小
+unusual_frequency_threshold = 3.0  # 异常频率阈值（标准差倍数）
+
+# 异常交易量探测器
+[strategies.token_movement.config.detectors.unusual_volume]
+unusual_volume_threshold = 3.0  # 异常交易量阈值（标准差倍数）
+
+# 监控地址探测器
+[strategies.token_movement.config.detectors.watched_address]
+addresses = [
+  "0x28C6c06298d514Db089934071355E5743bf21d60",  # 示例：Binance 14 热钱包
+  "0x21a31Ee1afC51d94C2eFcCAa2092aD1028285549"   # 示例：Binance 15 热钱包
+]
+
+# 监控代币探测器
+[strategies.token_movement.config.detectors.watched_token]
+tokens = [
+  "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
+  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"   # USDC
+]
+
+# 过滤器配置
+[strategies.token_movement.config.filters]
+
+# 白名单过滤器
+[strategies.token_movement.config.filters.whitelist]
+whitelist_addresses = [
+  "0x881D40237659C251811CEC9c364ef91dC08D300C",  # Metamask: Swap Router
+  "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"   # Uniswap: Universal Router
+]
+
+# 节流过滤器
+[strategies.token_movement.config.filters.throttle]
+enabled = true
+cooldown = 300  # 冷却时间（秒）
+
+# 小额转账过滤器
+[strategies.token_movement.config.filters.small_transfer]
+enabled = true
+min_value_usd = 1000.0  # 最小 USD 价值
+
+# 执行器配置
 [executors]
 enabled = ["logger"]
+
+# 注意: 如果需要使用 webhook 执行器，需要先实现并注册该执行器
+# [executors.webhook]
+# endpoint = "https://example.com/webhook"
+# headers = { "Authorization" = "Bearer YOUR_API_KEY" }
