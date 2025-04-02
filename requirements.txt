@@ -1,5 +1,4 @@
 PyYAML==6.0.2
-aiodiskqueue>=0.1.2
 aioetherscan==0.9.4
 aiohappyeyeballs==2.4.3
 aiohttp-retry==2.9.1
