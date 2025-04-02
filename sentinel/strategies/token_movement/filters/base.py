@@ -2,7 +2,7 @@
 Base filter class for the Token Movement Strategy.
 """
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from sentinel.core.events import TokenTransferEvent
 
@@ -15,7 +15,7 @@ class BaseFilter(ABC):
     be processed or ignored based on various criteria.
     """
 
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the filter with configuration parameters.
 

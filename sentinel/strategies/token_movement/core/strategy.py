@@ -674,9 +674,7 @@ class TokenMovementStrategy(Strategy):
 
         # Only alert on watched addresses/tokens if they are part of a significant transfer or DEX trade
         # This helps reduce noise from routine transfers
-        should_alert_watched = (
-            is_watched_from or is_watched_to or is_watched_token
-        ) and (is_significant_transfer or is_dex_trade or is_high_interest_token)
+        should_alert_watched = is_watched_from or is_watched_to or is_watched_token
 
         if should_alert_watched:
             watch_type = []
@@ -701,9 +699,10 @@ class TokenMovementStrategy(Strategy):
             if is_high_interest_token:
                 alert_context.append("high interest token")
 
-            alert_title = (
-                f"Watched {', '.join(watch_type)} Activity: {', '.join(alert_context)}"
-            )
+            # 确保即使没有其他上下文，也能生成正确的标题
+            alert_title = f"Watched {', '.join(watch_type)} Activity"
+            if alert_context:
+                alert_title += f": {', '.join(alert_context)}"
 
             logger.info(
                 f"Transfer involving watched {'/'.join(watch_type)} detected: {', '.join(watched_items)}"
