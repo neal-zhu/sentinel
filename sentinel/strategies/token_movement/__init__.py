@@ -10,4 +10,4 @@ that can be enabled or disabled as needed.
 
 from sentinel.strategies.token_movement.core.strategy import TokenMovementStrategy
 
-__all__ = ['TokenMovementStrategy']
+__all__ = ["TokenMovementStrategy"]

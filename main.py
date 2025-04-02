@@ -5,19 +5,21 @@ from pathlib import Path
 from typing import Optional
 
 # Import sentinel package which automatically registers all components
-import sentinel
 from sentinel.config import Config
 from sentinel.core.builder import SentinelBuilder
 from sentinel.logger import logger, setup_logger
 
+
 class GracefulExit(SystemExit):
     """Custom exception for handling graceful shutdown"""
+
     code = 1
+
 
 def handle_signal(signum, frame):
     """
     Signal handler for graceful shutdown
-    
+
     Args:
         signum: Signal number received
         frame: Current stack frame
@@ -25,40 +27,43 @@ def handle_signal(signum, frame):
     logger.info(f"Received signal {signum}")
     raise GracefulExit()
 
+
 async def run_sentinel(config_path: Optional[str] = None) -> None:
     """
     Main function to run the Sentinel application
-    
+
     Args:
         config_path: Optional path to the configuration file
     """
     sentinel_instance = None
-    
+
     try:
         # Initialize configuration
         config = Config(config_path)
-        
+
         # Setup logging based on configuration
-        setup_logger(config.get('logging', {}))
-        
+        setup_logger(config.get("logging", {}))
+
         # Build Sentinel instance using builder pattern
-        sentinel_instance = (SentinelBuilder(config)
-                          .build_collectors()
-                          .build_strategies()
-                          .build_executors()
-                          .build())
-        
+        sentinel_instance = (
+            SentinelBuilder(config)
+            .build_collectors()
+            .build_strategies()
+            .build_executors()
+            .build()
+        )
+
         # Start and run the instance
         logger.info("Starting Sentinel...")
         await sentinel_instance.start()
-        
+
         # Wait for shutdown signal
         try:
             # Wait for sentinel to complete or for a shutdown signal
             await sentinel_instance.join()
         except GracefulExit:
             logger.info("Received shutdown signal, stopping gracefully...")
-        
+
     except Exception as e:
         logger.error(f"Error running Sentinel: {e}")
         raise
@@ -74,10 +79,11 @@ async def run_sentinel(config_path: Optional[str] = None) -> None:
             except Exception as e:
                 logger.error(f"Error stopping Sentinel: {e}")
 
+
 def main():
     """
     Entry point for the command line interface
-    
+
     Handles:
     1. Signal registration for graceful shutdown
     2. Configuration file loading
@@ -87,7 +93,7 @@ def main():
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
-    
+
     # Handle configuration file path from command line
     config_path = None
     if len(sys.argv) > 1:
@@ -95,7 +101,7 @@ def main():
         if not config_path.exists():
             logger.error(f"Config file not found: {config_path}")
             sys.exit(1)
-    
+
     try:
         # Run the main application
         asyncio.run(run_sentinel(config_path))
@@ -106,6 +112,7 @@ def main():
         # Fatal error
         logger.critical(f"Fatal error: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

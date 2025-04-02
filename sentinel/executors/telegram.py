@@ -1,9 +1,10 @@
 from telegram import Bot
 from telegram.error import TelegramError
 
-from ..core.base import Executor
 from ..core.actions import Action
+from ..core.base import Executor
 from ..logger import logger
+
 
 class TelegramExecutor(Executor):
     __component_name__ = "telegram"
@@ -11,7 +12,7 @@ class TelegramExecutor(Executor):
     def __init__(self, bot_token: str, chat_id: str):
         """
         初始化 Telegram 执行器
-        
+
         Args:
             bot_token: Telegram Bot Token
             chat_id: 目标聊天 ID
@@ -19,36 +20,34 @@ class TelegramExecutor(Executor):
         super().__init__()
         self.bot = Bot(token=bot_token)
         self.chat_id = chat_id
-        
+
     async def execute(self, action: Action) -> None:
         """
         执行消息推送动作
-        
+
         Args:
             action: 包含消息内容的动作对象
-            
+
         Returns:
             bool: 发送是否成功
         """
         try:
             message = self._format_message(action)
             await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=message,
-                parse_mode='HTML'
+                chat_id=self.chat_id, text=message, parse_mode="HTML"
             )
             logger.info(f"Successfully sent message to Telegram: {message[:100]}...")
-            
+
         except TelegramError as e:
             logger.error(f"Failed to send message to Telegram: {str(e)}")
-            
+
     def _format_message(self, action: Action) -> str:
         """
         格式化消息内容
-        
+
         Args:
             action: 动作对象
-            
+
         Returns:
             str: 格式化后的消息
         """

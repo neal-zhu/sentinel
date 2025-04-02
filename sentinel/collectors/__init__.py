@@ -1,7 +1,4 @@
-from .web3_transaction import TransactionCollector
 from .token_transfer import TokenTransferCollector
+from .web3_transaction import TransactionCollector
 
-__all__ = [
-    "TransactionCollector",
-    "TokenTransferCollector"
-]
+__all__ = ["TransactionCollector", "TokenTransferCollector"]

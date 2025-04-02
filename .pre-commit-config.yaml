@@ -1,0 +1,52 @@
+repos:
+
+-   repo: https://github.com/pycqa/isort
+    rev: 5.11.5
+    hooks:
+    -   id: isort
+        name: isort (python)
+        require_serial: false
+        exclude: /protobuf/
+
+-   repo: https://github.com/psf/black
+    rev: 23.10.1
+    hooks:
+    -   id: black
+        language_version: python3
+        exclude: /(\\.eggs|\\.git|\\.hg|\\.mypy_cache|\\.nox|\\.tox|\\.venv|_build|buck-out|build|dist|migrations|_pb2|pycoin|protobuf)/
+        require_serial: false
+
+-   repo: https://github.com/pycqa/flake8
+    rev: 3.8.3
+    hooks:
+    -   id: flake8
+        language_version: python3.10
+        exclude: /(migrations|_pb2|protobuf)/
+        additional_dependencies: ["importlib-metadata==4.13.0"]
+        require_serial: false
+
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v3.1.0
+    hooks:
+    -   id: end-of-file-fixer
+        exclude: /(migrations|_pb2|pycoin|deprecated|protobuf)/
+        files: .*.py$
+        require_serial: false
+    -   id: trailing-whitespace
+        exclude: /(migrations|_pb2|pycoin|deprecated|protobuf)/
+        files: .*.py$
+        require_serial: false
+    -   id: file-contents-sorter
+        files: ^(requirements.*.txt)$
+        require_serial: false
+
+-   repo: https://github.com/PyCQA/bandit
+    rev: 1.6.2
+    hooks:
+    -   id: bandit
+        language_version: python3
+        exclude: /(migrations|_pb2|pycoin|deprecated|protobuf)/
+        args: [ -c, ".bandit_scan.cfg", -f, "txt", -o, "bandit_scan.log", --baseline, ".bandit_baseline.json" ]
+        additional_dependencies: ["importlib-metadata==4.13.0"]
+        require_serial: false
+
