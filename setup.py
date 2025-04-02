@@ -4,7 +4,7 @@ Setup script for Sentinel package
 Handles package dependencies and installation configuration.
 """
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="sentinel",
@@ -33,4 +33,4 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
-) 
+)

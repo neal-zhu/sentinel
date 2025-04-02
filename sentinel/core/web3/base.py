@@ -1,4 +1,5 @@
-from typing import Dict, Any
+from typing import Any, Dict
+
 from web3 import Web3
 
 # Common ERC20 event signatures
@@ -14,7 +15,7 @@ ERC20_ABI = [
         "outputs": [{"name": "", "type": "string"}],
         "payable": False,
         "stateMutability": "view",
-        "type": "function"
+        "type": "function",
     },
     {
         "constant": True,
@@ -23,7 +24,7 @@ ERC20_ABI = [
         "outputs": [{"name": "", "type": "string"}],
         "payable": False,
         "stateMutability": "view",
-        "type": "function"
+        "type": "function",
     },
     {
         "constant": True,
@@ -32,7 +33,7 @@ ERC20_ABI = [
         "outputs": [{"name": "", "type": "uint8"}],
         "payable": False,
         "stateMutability": "view",
-        "type": "function"
+        "type": "function",
     },
     {
         "constant": True,
@@ -41,20 +42,20 @@ ERC20_ABI = [
         "outputs": [{"name": "balance", "type": "uint256"}],
         "payable": False,
         "stateMutability": "view",
-        "type": "function"
+        "type": "function",
     },
     {
         "constant": True,
         "inputs": [
             {"name": "_owner", "type": "address"},
-            {"name": "_spender", "type": "address"}
+            {"name": "_spender", "type": "address"},
         ],
         "name": "allowance",
         "outputs": [{"name": "", "type": "uint256"}],
         "payable": False,
         "stateMutability": "view",
-        "type": "function"
-    }
+        "type": "function",
+    },
 ]
 
 # Known DeFi protocol addresses (example)
@@ -63,20 +64,22 @@ KNOWN_DEFI_PROTOCOLS: Dict[str, str] = {
     "uniswap_v3_router": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
     "sushiswap_router": "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F",
     "aave_v2_lending_pool": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
-    "curve_swap_router": "0x8e764bE4288B842791989DB5B8ec067279829809"
+    "curve_swap_router": "0x8e764bE4288B842791989DB5B8ec067279829809",
 }
+
 
 def format_token_amount(amount: int, decimals: int) -> float:
     """Format token amount from wei to human readable format."""
-    return amount / (10 ** decimals)
+    return amount / (10**decimals)
+
 
 def parse_transfer_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     Parse a Transfer event into a human readable format.
-    
+
     Args:
         event: The raw event data from Web3
-        
+
     Returns:
         Dict containing parsed event data
     """
@@ -85,9 +88,10 @@ def parse_transfer_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "to": event["args"]["to"],
         "value": event["args"]["value"],
         "block_number": event["blockNumber"],
-        "transaction_hash": event["transactionHash"].hex()
+        "transaction_hash": event["transactionHash"].hex(),
     }
+
 
 def is_known_protocol(address: str) -> bool:
     """Check if an address is a known DeFi protocol."""
-    return address.lower() in [addr.lower() for addr in KNOWN_DEFI_PROTOCOLS.values()] 
+    return address.lower() in [addr.lower() for addr in KNOWN_DEFI_PROTOCOLS.values()]

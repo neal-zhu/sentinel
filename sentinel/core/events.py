@@ -1,53 +1,59 @@
 from datetime import datetime
-from typing import Optional, Dict, Any
-from web3.types import BlockData, TxData
+from typing import Any, Dict, Optional
+
 from pydantic import BaseModel, Field
+from web3.types import BlockData, TxData
+
 
 class Event(BaseModel):
     """Base class for all events"""
+
     type: str = Field(...)  # Required field
 
     class Config:
         """Pydantic configuration"""
+
         frozen = True  # Make Event instances immutable
         arbitrary_types_allowed = True  # Allow Web3 types
+
 
 class TransactionEvent(Event):
     """
     Event class for blockchain transactions
-    
+
     Stores transaction and block data in dictionary format for flexibility,
     while providing typed access through properties.
     """
+
     type: str = "transaction"  # Default event type
     transaction: Dict[str, Any]  # Raw transaction data
     block: Dict[str, Any]  # Raw block data
     timestamp: datetime
-    
+
     @property
     def tx_data(self) -> TxData:
         """
         Get transaction data as Web3 TxData type
-        
+
         Returns:
             TxData: Typed transaction data
         """
         return TxData(self.transaction)
-    
+
     @property
     def block_data(self) -> BlockData:
         """
         Get block data as Web3 BlockData type
-        
+
         Returns:
             BlockData: Typed block data
         """
         return BlockData(self.block)
-    
+
     def __str__(self) -> str:
         """
         Format event content as human-readable string
-        
+
         Returns:
             str: Formatted event information
         """
@@ -64,26 +70,28 @@ class TransactionEvent(Event):
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert event to dictionary format
-        
+
         Returns:
             Dict[str, Any]: Event data in dictionary format
         """
         return {
             "type": self.type,
-            "transaction_hash": self.transaction['hash'].hex(),
-            "block_number": self.block['number'],
-            "from": self.transaction['from'],
-            "to": self.transaction.get('to', 'Contract Creation'),
-            "value": self.transaction['value'],
-            "timestamp": self.timestamp.isoformat()
+            "transaction_hash": self.transaction["hash"].hex(),
+            "block_number": self.block["number"],
+            "from": self.transaction["from"],
+            "to": self.transaction.get("to", "Contract Creation"),
+            "value": self.transaction["value"],
+            "timestamp": self.timestamp.isoformat(),
         }
+
 
 class TokenTransferEvent(Event):
     """
     Token Transfer Event
-    
+
     Contains detailed information about ERC20 token transfers or native token transfers
     """
+
     type: str = "token_transfer"  # Event type
     chain_id: int  # Chain ID
     token_address: Optional[str] = None  # Token contract address, None for ETH
@@ -99,19 +107,25 @@ class TokenTransferEvent(Event):
     block_timestamp: datetime  # Block timestamp
     log_index: Optional[int] = None  # Log index, only valid for ERC20
     is_native: bool = False  # Whether it's a native token (ETH/BNB etc.)
-    
+    has_contract_interaction: bool = (
+        False  # Whether this transfer involves contract interaction
+    )
+
     def __str__(self) -> str:
         """
         Format event content as human-readable string
-        
+
         Returns:
             str: Formatted event information
         """
         token_type = "Native Token" if self.is_native else "ERC20 Token"
         token_info = f"{self.token_symbol}" if self.token_symbol else "ETH"
-        
+        interaction = (
+            " (with contract interaction)" if self.has_contract_interaction else ""
+        )
+
         return (
-            f"Token Transfer Event:\n"
+            f"Token Transfer Event:{interaction}\n"
             f"  Type: {token_type}\n"
             f"  Chain: {self.chain_id}\n"
             f"  Token: {token_info}\n"
@@ -122,11 +136,11 @@ class TokenTransferEvent(Event):
             f"  Block: {self.block_number}\n"
             f"  Timestamp: {self.block_timestamp}"
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert event to dictionary format
-        
+
         Returns:
             Dict[str, Any]: Event data as dictionary
         """
@@ -139,11 +153,14 @@ class TokenTransferEvent(Event):
             "token_decimals": self.token_decimals,
             "from_address": self.from_address,
             "to_address": self.to_address,
-            "value": str(self.value),  # Convert to string to avoid large integer serialization issues
+            "value": str(
+                self.value
+            ),  # Convert to string to avoid large integer serialization issues
             "formatted_value": self.formatted_value,
             "transaction_hash": self.transaction_hash,
             "block_number": self.block_number,
             "block_timestamp": self.block_timestamp.isoformat(),
             "log_index": self.log_index,
-            "is_native": self.is_native
+            "is_native": self.is_native,
+            "has_contract_interaction": self.has_contract_interaction,
         }
