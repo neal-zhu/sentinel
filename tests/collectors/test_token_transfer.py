@@ -391,29 +391,27 @@ async def test_scan_erc20_transfers(token_transfer_collector):
             return items
         return []
     
-    # Apply the monkey patch
-    with patch('sentinel.collectors.token_transfer.safe_to_list', side_effect=mock_to_list):
-        # Call the scan method
-        start_block = 1000000
-        end_block = 1000010
-        
-        # 收集异步生成器生成的所有事件
-        transfers = []
-        async for transfer in token_transfer_collector._scan_erc20_transfers('ethereum', start_block, end_block):
-            transfers.append(transfer)
+    # Call the scan method
+    start_block = 1000000
+    end_block = 1000010
     
-        # Verify that get_logs was called with the correct parameters
-        token_transfer_collector.web3_connections['ethereum'].eth.get_logs.assert_called_once()
-        
-        # Because our mock data is likely not used exactly as expected, just check
-        # if the test case properly detects events assuming token_transfer_collector._get_token
-        # works correctly and returns our mock token
-        
-        # Verify that _get_token was called
-        token_transfer_collector._get_token.assert_called_once()
-        
-        # Ensure we found *some* ERC20 transfer
-        assert len(transfers) > 0
+    # 收集异步生成器生成的所有事件
+    transfers = []
+    async for transfer in token_transfer_collector._scan_erc20_transfers('ethereum', start_block, end_block):
+        transfers.append(transfer)
+    
+    # Verify that get_logs was called with the correct parameters
+    token_transfer_collector.web3_connections['ethereum'].eth.get_logs.assert_called_once()
+    
+    # Because our mock data is likely not used exactly as expected, just check
+    # if the test case properly detects events assuming token_transfer_collector._get_token
+    # works correctly and returns our mock token
+    
+    # Verify that _get_token was called
+    token_transfer_collector._get_token.assert_called_once()
+    
+    # Ensure we found *some* ERC20 transfer
+    assert len(transfers) > 0
 
 @pytest.mark.asyncio
 async def test_scan_native_transfers(token_transfer_collector):

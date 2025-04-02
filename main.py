@@ -60,9 +60,7 @@ async def run_sentinel(config_path: Optional[str] = None) -> None:
             logger.info("Received shutdown signal, stopping gracefully...")
         
     except Exception as e:
-        import traceback
         logger.error(f"Error running Sentinel: {e}")
-        logger.error(traceback.format_exc())
         raise
     finally:
         if sentinel_instance:

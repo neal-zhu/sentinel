@@ -1,29 +1,14 @@
 import asyncio
-from typing import Dict, List, Optional, Any, AsyncIterable, Coroutine, TypedDict, AsyncGenerator
+from typing import Dict, List, Optional, Any, AsyncGenerator
 from datetime import datetime
 from web3 import AsyncWeb3, Web3
-from web3.types import FilterParams
 
 from sentinel.core.base import Collector
 from sentinel.core.events import Event, TokenTransferEvent
-from sentinel.core.web3.multi_provider import AsyncMultiNodeProvider, MultiNodeProvider
-from sentinel.core.web3.erc20_token import ERC20Token, AsyncERC20Token
+from sentinel.core.web3.multi_provider import AsyncMultiNodeProvider
+from sentinel.core.web3.erc20_token import AsyncERC20Token
 from sentinel.core.storage import BlockchainStateStore
 from sentinel.logger import logger
-
-# Custom type helpers for Web3 types to properly handle BlockData and TxData
-class SafeBlockData(TypedDict, total=False):
-    """Safe wrapper for BlockData to handle optional fields"""
-    timestamp: int
-    transactions: List[Any]
-
-class SafeTxData(TypedDict, total=False):
-    """Safe wrapper for TxData to handle optional fields"""
-    to: Optional[str]
-    from_: str  # Web3.py uses from_ in Python since 'from' is reserved
-    value: int
-    input: str
-    hash: str
 
 # Helper function for safe timestamp conversion
 def safe_timestamp_to_float(timestamp_value: Any) -> float:
@@ -65,44 +50,6 @@ def safe_timestamp_to_float(timestamp_value: Any) -> float:
     # If all else fails, return 0
     logger.warning(f"Could not convert timestamp value: {timestamp_value} to float")
     return 0.0
-
-# Helper function for safe list conversion
-def safe_to_list(data: Any) -> List[Any]:
-    """
-    Safely convert data to a list, handling various input types.
-    
-    Args:
-        data: The data to convert to a list, which could be any type
-        
-    Returns:
-        List[Any]: The data as a list, or an empty list if conversion fails
-    """
-    if data is None:
-        return []
-    
-    if isinstance(data, list):
-        return data
-    
-    if isinstance(data, (tuple, set)):
-        return list(data)
-    
-    # Try to convert to list if it has __iter__
-    try:
-        if hasattr(data, "__iter__") and not isinstance(data, (str, bytes, dict)):
-            return list(data)
-    except (TypeError, ValueError):
-        pass
-    
-    # Try to access as array-like object
-    try:
-        if hasattr(data, "__len__") and hasattr(data, "__getitem__"):
-            return [data[i] for i in range(len(data))]
-    except (TypeError, ValueError, IndexError):
-        pass
-    
-    # If all else fails, return empty list
-    logger.warning(f"Could not convert data to list: {data}")
-    return []
 
 class TokenTransferCollector(Collector):
     """
@@ -366,7 +313,7 @@ class TokenTransferCollector(Collector):
                     
                     # Create transfer event
                     transfer_event = TokenTransferEvent(
-                        chain_id=chain_id,
+                        chain_id=self.chain_id,
                         token_address=token.address,
                         token_name=token.name,
                         token_symbol=token.symbol,
@@ -475,7 +422,7 @@ class TokenTransferCollector(Collector):
                             continue
                         
                         # Format value
-                        formatted_value = float(web3.from_wei(value, 'ether'))
+                        formatted_value = float(self.web3.from_wei(value, 'ether'))
                         
                         # Get transaction hash
                         tx_hash = tx_dict.get("hash", None)
@@ -564,10 +511,10 @@ class TokenTransferCollector(Collector):
                         erc20_count += 1
                         yield event
                     
-                    # Scan and yield native token transfers immediately
-                    async for event in self._scan_native_transfers(from_block, to_block):
-                        native_count += 1
-                        yield event
+                    ## Scan and yield native token transfers immediately
+                    #async for event in self._scan_native_transfers(from_block, to_block):
+                    #    native_count += 1
+                    #    yield event
                     
                     # Update last checked block and persist to storage with component ID
                     self.last_checked_block = to_block

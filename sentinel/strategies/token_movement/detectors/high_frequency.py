@@ -45,15 +45,14 @@ class HighFrequencyDetector(BaseDetector):
         
         # Get address transfers by block from context
         address_transfers_by_block = context.get('address_transfers_by_block', {})
-        last_checked_block = context.get('last_checked_block', {})
+        last_checked_block = context.get('last_checked_block', 0)
         
         # Check if we've already analyzed this block
-        if chain_id in last_checked_block and last_checked_block[chain_id] >= block_number:
+        if last_checked_block >= block_number:
             return []
             
         # Update last checked block in context
-        if 'last_checked_block' in context:
-            context['last_checked_block'][chain_id] = block_number
+        context['last_checked_block'] = block_number
         
         # Define high frequency window based on block times
         # For example, 100 blocks on Ethereum (~25 min), 500 on BSC (~25 min)

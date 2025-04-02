@@ -130,7 +130,8 @@ class TokenMovementStrategy(Strategy):
         # Track last checked block (to avoid duplicate analysis)
         self.last_checked_block: int = 0
         
-
+        # Get alert cooldown from config
+        self.alert_cooldown = self.config.get('strategy', {}).get('alert_cooldown', 300)  # Default: 5 minutes
         
         # Initialize caches
         self.token_symbols_cache: Dict[str, str] = {}
@@ -601,6 +602,7 @@ class TokenMovementStrategy(Strategy):
             'is_watched_from': event.from_address in watched_addresses,
             'is_watched_to': event.to_address in watched_addresses,
             'is_watched_token': False,  # Will be set below if applicable
+            'is_high_interest_token': False,  # Will be set in the filter check
         }
         
         # Check if this is a watched token
@@ -625,20 +627,50 @@ class TokenMovementStrategy(Strategy):
         # Collect alerts from all enabled detectors
         all_alerts = []
         
-        # Special handling for watched addresses - always alert
+        # Special handling for watched addresses/tokens - generate alerts with appropriate context
         is_watched_from = context['is_watched_from']
         is_watched_to = context['is_watched_to']
         is_watched_token = context['is_watched_token']
+        is_high_interest_token = context.get('is_high_interest_token', False)
+        is_dex_trade = context.get('is_dex_trade', False)
+        is_significant_transfer = context.get('is_significant_transfer', False)
         
-        if is_watched_from or is_watched_to or is_watched_token:
-            watch_type = "address" if (is_watched_from or is_watched_to) else "token"
-            watched_item = event.from_address if is_watched_from else (event.to_address if is_watched_to else event.token_address)
+        # Only alert on watched addresses/tokens if they are part of a significant transfer or DEX trade
+        # This helps reduce noise from routine transfers
+        should_alert_watched = (is_watched_from or is_watched_to or is_watched_token) and (
+            is_significant_transfer or is_dex_trade or is_high_interest_token
+        )
+        
+        if should_alert_watched:
+            watch_type = []
+            if is_watched_from or is_watched_to:
+                watch_type.append("address")
+            if is_watched_token:
+                watch_type.append("token")
             
-            logger.info(f"Transfer involving watched {watch_type} detected: {watched_item}")
+            watched_items = []
+            if is_watched_from:
+                watched_items.append(f"from:{event.from_address}")
+            if is_watched_to:
+                watched_items.append(f"to:{event.to_address}")
+            if is_watched_token:
+                watched_items.append(f"token:{event.token_address}")
+                
+            alert_context = []
+            if is_significant_transfer:
+                alert_context.append("significant transfer")
+            if is_dex_trade:
+                alert_context.append("DEX trade")
+            if is_high_interest_token:
+                alert_context.append("high interest token")
+                
+            alert_title = f"Watched {', '.join(watch_type)} Activity: {', '.join(alert_context)}"
+            
+            logger.info(f"Transfer involving watched {'/'.join(watch_type)} detected: {', '.join(watched_items)}")
             
             all_alerts.append(Alert(
-                title=f"Watched {watch_type.capitalize()} Activity",
-                description=f"Transfer involving watched {watch_type} {watched_item}",
+                title=alert_title,
+                description=f"Transfer involving watched {'/'.join(watch_type)} {', '.join(watched_items)}",
                 severity="medium",
                 source="token_movement_strategy",
                 timestamp=datetime.now(),
@@ -652,6 +684,9 @@ class TokenMovementStrategy(Strategy):
                     "from_watched": is_watched_from,
                     "to_watched": is_watched_to,
                     "token_watched": is_watched_token,
+                    "high_interest_token": is_high_interest_token, 
+                    "is_dex_trade": is_dex_trade,
+                    "is_significant": is_significant_transfer,
                     "value": str(event.value),
                     "formatted_value": event.formatted_value,
                     "transaction_hash": event.transaction_hash,
@@ -659,29 +694,32 @@ class TokenMovementStrategy(Strategy):
                 }
             ))
         
-        # Run all enabled detectors
+        # Run each enabled detector against the event
         for detector_name, detector in self.detectors.items():
             if detector.is_enabled():
                 try:
                     detector_alerts = await detector.detect(event, context)
+                    
+                    # Check if we should rate-limit alerts from this detector
                     if detector_alerts:
-                        logger.debug(f"Detector {detector_name} generated {len(detector_alerts)} alerts")
-                        all_alerts.extend(detector_alerts)
+                        for alert in detector_alerts:
+                            # Create a unique key for each type of alert
+                            alert_key = f"{detector_name}:{event.chain_id}:{event.token_address or 'native'}"
+                            
+                            # Add specific identifier for the alert if available
+                            if hasattr(alert, 'data') and alert.data and 'pattern_type' in alert.data:
+                                alert_key += f":{alert.data['pattern_type']}"
+                                
+                            # Check if we should send this alert (rate limiting)
+                            if self._should_alert(alert_key):
+                                all_alerts.append(alert)
+                            else:
+                                logger.debug(f"Alert from {detector_name} rate-limited: {alert_key}")
+                                
                 except Exception as e:
-                    logger.error(f"Error in detector {detector_name}: {str(e)}")
+                    logger.error(f"Error in detector {detector_name}: {e}")
         
-        # Apply rate limiting and deduplication
-        final_alerts = self._deduplicate_alerts(all_alerts)
-        
-        if len(final_alerts) < len(all_alerts):
-            logger.debug(f"Deduplicated alerts: {len(all_alerts)} -> {len(final_alerts)}")
-        
-        # Log generated alert types
-        if final_alerts:
-            alert_types = [alert.title for alert in final_alerts]
-            logger.info(f"Alert types generated: {', '.join(alert_types)}")
-        
-        return final_alerts
+        return all_alerts
     
     async def process(self, events: List[Event]) -> List[Any]:
         """

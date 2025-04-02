@@ -22,10 +22,12 @@ include_native_transfers = true
 include_erc20_transfers = true
 # 存储路径
 db_path = "./blockchain_state"
-# 代币地址配置 - 指定要监控的代币
+# 代币地址配置 - 指定要监控的代币（只监控重点代币以减少噪音）
 token_addresses = [
   "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
-  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"   # USDC
+  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",  # USDC
+  "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH
+  # 添加其他你想要关注的主要代币
 ]
 
 # Strategies Configuration
@@ -40,62 +42,114 @@ chain_id = 1  # 以太坊主网
 # 策略级别配置
 [strategies.token_movement.config.strategy]
 statistics_window = 24  # 统计窗口大小（小时）
+# 警报冷却时间（减少重复警报）
+alert_cooldown = 900  # 15分钟冷却时间
 
 # 探测器配置
 [strategies.token_movement.config.detectors]
 
-# 大额转账探测器
+# 大额转账探测器（提高阈值减少噪音）
 [strategies.token_movement.config.detectors.significant_transfer]
-significant_transfer_threshold = { "ETH" = 10.0, "USDT" = 100000.0, "USDC" = 100000.0 }
+enabled = true
+# 默认阈值（单位为token的个数）
+default_threshold = 500.0
+# 稳定币更高阈值（稳定币需要更大金额才有意义）
+stablecoin_threshold = 100000.0
 
-# 高频转账探测器
+# 各代币独立阈值设置 - 使用TOML点表示法定义嵌套键
+[strategies.token_movement.config.detectors.significant_transfer.significant_transfer_threshold]
+[strategies.token_movement.config.detectors.significant_transfer.significant_transfer_threshold.1]
+ETH = 25.0         # 25 ETH约为$50,000
+WETH = 25.0        # 同上
+WBTC = 1.0         # 约为$50,000
+USDT = 100000.0    # $100,000
+USDC = 100000.0    # $100,000
+BUSD = 100000.0    # $100,000
+UNI = 5000.0       # 约为$25,000
+LINK = 2000.0      # 约为$25,000
+DEFAULT = 500.0    # 其他代币默认值
+
+# 高频转账探测器（聚焦交易模式）
 [strategies.token_movement.config.detectors.high_frequency]
+enabled = true
 window_size = 100  # 监控窗口大小
-unusual_frequency_threshold = 3.0  # 异常频率阈值（标准差倍数）
+unusual_frequency_threshold = 4.0  # 异常频率阈值（提高标准差倍数减少误报）
+min_transfers = 5  # 最小转账次数，低于此数不触发警报
 
-# 异常交易量探测器
-[strategies.token_movement.config.detectors.unusual_volume]
-unusual_volume_threshold = 3.0  # 异常交易量阈值（标准差倍数）
+# 多跳交易模式探测器（非常适合发现套利和MEV机会）
+[strategies.token_movement.config.detectors.multi_hop]
+enabled = true
+arbitrage_time_window = 60  # 套利时间窗口（秒）
+min_addresses = 3  # 最小地址数量
+min_tokens = 2  # 最小代币数量（至少涉及2种代币才可能是套利）
 
-# 监控地址探测器
+# 洗盘交易探测器
+[strategies.token_movement.config.detectors.wash_trading]
+enabled = true
+circular_transfer_threshold = 3  # 循环转账阈值
+
+# 持续资金流动探测器（关注持续的资金移动）
+[strategies.token_movement.config.detectors.continuous_flow]
+enabled = true
+flow_window = 600  # 时间窗口（秒）
+min_transfers = 3  # 最小转账次数
+direction_threshold = 0.8  # 方向阈值（0.8意味着80%的资金流向一个方向）
+
+# 监控地址探测器（专注于套利和alpha交易地址）
 [strategies.token_movement.config.detectors.watched_address]
+enabled = true
 addresses = [
+  # 添加已知的套利地址或者MEV机器人地址
   "0x28C6c06298d514Db089934071355E5743bf21d60",  # 示例：Binance 14 热钱包
-  "0x21a31Ee1afC51d94C2eFcCAa2092aD1028285549"   # 示例：Binance 15 热钱包
+  "0x21a31Ee1afC51d94C2eFcCAa2092aD1028285549",  # 示例：Binance 15 热钱包
+  # 添加其他需要关注的地址
 ]
 
-# 监控代币探测器
+# 监控代币探测器（仅监控关键代币以减少噪音）
 [strategies.token_movement.config.detectors.watched_token]
+enabled = true
 tokens = [
   "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
-  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"   # USDC
+  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",  # USDC
+  "0x4Fabb145d64652a948d72533023f6E7A623C7C53",  # BUSD
+  "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",  # WBTC
+  "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH
+  # 添加其他需要关注的代币
 ]
 
 # 过滤器配置
 [strategies.token_movement.config.filters]
 
-# 白名单过滤器
+# 白名单过滤器（添加更多DEX和常见合约以减少噪音）
 [strategies.token_movement.config.filters.whitelist]
+enabled = false  # 禁用白名单过滤，因为我们想监控DEX上的活动来发现套利
 whitelist_addresses = [
+  # 只有在你不想监控特定平台的活动时才启用这些地址
   "0x881D40237659C251811CEC9c364ef91dC08D300C",  # Metamask: Swap Router
-  "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"   # Uniswap: Universal Router
+  "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",  # Uniswap: Universal Router
+  "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",  # Uniswap V2: Router
+  "0xE592427A0AEce92De3Edee1F18E0157C05861564",  # Uniswap V3: Router
+  "0x1111111254fb6c44bAC0beD2854e76F90643097d"   # 1inch Router
 ]
 
-# 节流过滤器
-[strategies.token_movement.config.filters.throttle]
-enabled = true
-cooldown = 300  # 冷却时间（秒）
-
-# 小额转账过滤器
+# 小额转账过滤器（过滤掉小额转账减少噪音）
 [strategies.token_movement.config.filters.small_transfer]
 enabled = true
-min_value_usd = 1000.0  # 最小 USD 价值
+filter_small_transfers = true
+small_transfer_threshold = 0.05  # 低于平均交易额5%的转账会被过滤
+min_stats_count = 50  # 需要至少50个数据点才能使用平均值过滤
+
+# DEX交易过滤器（专注于DEX交易来发现套利机会）
+[strategies.token_movement.config.filters.dex_trade]
+enabled = true
+filter_dex_trades = false  # 不过滤DEX交易，因为我们想关注DEX上的套利机会
+only_dex_trades = true     # 只关注DEX交易，减少普通转账的噪音
+
+# 简单转账过滤器（过滤掉普通EOA之间的转账）
+[strategies.token_movement.config.filters.simple_transfer]
+enabled = true
+require_significant = true  # 仅处理重要金额的简单转账
 
 # 执行器配置
 [executors]
 enabled = ["logger"]
-
-# 注意: 如果需要使用 webhook 执行器，需要先实现并注册该执行器
-# [executors.webhook]
-# endpoint = "https://example.com/webhook"
-# headers = { "Authorization" = "Bearer YOUR_API_KEY" }
