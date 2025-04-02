@@ -21,7 +21,6 @@ include_native_transfers = true
 # 包括ERC20代币转账
 include_erc20_transfers = true
 # 存储路径
-db_path = "./blockchain_state"
 # 代币地址配置 - 指定要监控的代币（只监控重点代币以减少噪音）
 token_addresses = [
   "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT

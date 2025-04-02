@@ -28,7 +28,7 @@ def handle_signal(signum, frame):
     raise GracefulExit()
 
 
-async def run_sentinel(config_path: Optional[str] = None) -> None:
+async def run_sentinel(config_path: Optional[Path] = None) -> None:
     """
     Main function to run the Sentinel application
 
@@ -39,7 +39,7 @@ async def run_sentinel(config_path: Optional[str] = None) -> None:
 
     try:
         # Initialize configuration
-        config = Config(config_path)
+        config = Config(str(config_path) if config_path else None)
 
         # Setup logging based on configuration
         setup_logger(config.get("logging", {}))
@@ -74,10 +74,36 @@ async def run_sentinel(config_path: Optional[str] = None) -> None:
                 # Attempt to stop all components with timeout
                 await asyncio.wait_for(sentinel_instance.stop(), timeout=10.0)
                 logger.info("Sentinel stopped successfully")
+
+                # 确保所有任务都已取消
+                tasks = [
+                    t for t in asyncio.all_tasks() if t is not asyncio.current_task()
+                ]
+                if tasks:
+                    logger.info(f"Cancelling {len(tasks)} remaining tasks...")
+                    # 取消所有剩余任务
+                    for task in tasks:
+                        task.cancel()
+                    # 等待它们完成或被取消
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    logger.info("All tasks cancelled successfully")
+
             except asyncio.TimeoutError:
                 logger.error("Timeout while stopping Sentinel")
+                # 强制取消所有任务
+                tasks = [
+                    t for t in asyncio.all_tasks() if t is not asyncio.current_task()
+                ]
+                for task in tasks:
+                    task.cancel()
             except Exception as e:
                 logger.error(f"Error stopping Sentinel: {e}")
+                # 依然尝试取消任务
+                tasks = [
+                    t for t in asyncio.all_tasks() if t is not asyncio.current_task()
+                ]
+                for task in tasks:
+                    task.cancel()
 
 
 def main():

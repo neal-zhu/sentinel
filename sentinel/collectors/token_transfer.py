@@ -6,7 +6,6 @@ from web3 import AsyncWeb3, Web3
 
 from sentinel.core.base import Collector
 from sentinel.core.events import Event, TokenTransferEvent
-from sentinel.core.storage import BlockchainStateStore
 from sentinel.core.web3.erc20_token import AsyncERC20Token
 from sentinel.core.web3.multi_provider import AsyncMultiNodeProvider
 from sentinel.logger import logger
@@ -82,8 +81,6 @@ class TokenTransferCollector(Collector):
         ] = None,  # Optional list of token contracts to monitor
         include_native_transfers: bool = True,  # Whether to include native token transfers
         include_erc20_transfers: bool = True,  # Whether to include ERC20 token transfers
-        # Storage settings
-        db_path: str = "./blockchain_state",  # Path to blockchain state storage
     ):
         """
         Initialize Token Transfer Collector for a single blockchain
@@ -97,7 +94,6 @@ class TokenTransferCollector(Collector):
             token_addresses: Token contracts to specifically monitor (optional)
             include_native_transfers: Whether to include native token transfers
             include_erc20_transfers: Whether to include ERC20 token transfers
-            db_path: Path for storing blockchain state
         """
         super().__init__()
 
@@ -112,10 +108,6 @@ class TokenTransferCollector(Collector):
         self.token_addresses = token_addresses or []
         self.include_native_transfers = include_native_transfers
         self.include_erc20_transfers = include_erc20_transfers
-        self.db_path = db_path
-
-        # Initialize state storage
-        self.state_store = BlockchainStateStore(db_path)
 
         # Create Web3 connection
         provider = AsyncMultiNodeProvider(endpoint_uri=rpc_endpoints)
@@ -130,34 +122,25 @@ class TokenTransferCollector(Collector):
     async def _initialize_last_blocks(self):
         """Initialize last processed block for the chain"""
         try:
-            # Create component-specific key for block tracking
-            block_key = f"{self.__component_name__}:{self.chain_id}"
-
-            # Get the last processed block from persistent storage
-            last_block = self.state_store.get_last_processed_block(block_key)
-
-            # Set starting block based on storage, config, or current block
-            if last_block is not None:
+            # 使用 start_block 或当前区块作为起始区块，不再使用持久化存储
+            if self.start_block > 0:
                 logger.info(
-                    f"Resuming from last processed block {last_block} for {block_key}"
-                )
-                self.last_checked_block = last_block
-            elif self.start_block > 0:
-                logger.info(
-                    f"Starting from configured block {self.start_block} for {block_key}"
+                    f"Starting from configured block {self.start_block} for chain {self.chain_id}"
                 )
                 self.last_checked_block = self.start_block
             else:
                 # Default to current block
                 try:
-                    # 使用 await 获取当前区块高度
+                    # 获取当前区块高度
                     current_block = await self.web3.eth.block_number
                     logger.info(
-                        f"Starting from current block {current_block} for {block_key}"
+                        f"Starting from current block {current_block} for chain {self.chain_id}"
                     )
                     self.last_checked_block = current_block
                 except Exception as e:
-                    logger.error(f"Unable to get current block for {block_key}: {e}")
+                    logger.error(
+                        f"Unable to get current block for chain {self.chain_id}: {e}"
+                    )
                     self.last_checked_block = 0
         except Exception as e:
             logger.error(
@@ -199,9 +182,8 @@ class TokenTransferCollector(Collector):
 
     async def _stop(self):
         """Collector cleanup logic on shutdown"""
-        # Close the state store
-        if hasattr(self, "state_store"):
-            self.state_store.close()
+        # 不再需要关闭 state_store，直接返回
+        pass
 
     async def _get_token(self, token_address: str) -> Optional[AsyncERC20Token]:
         """
@@ -428,9 +410,6 @@ class TokenTransferCollector(Collector):
                         current_block, from_block + self.max_blocks_per_scan - 1
                     )
 
-                    # Create component-specific key for block tracking
-                    block_key = f"{self.__component_name__}:{self.chain_id}"
-
                     logger.info(
                         f"Scanning chain {self.chain_id} from block {from_block} to {to_block} for {self.__component_name__}"
                     )
@@ -443,26 +422,13 @@ class TokenTransferCollector(Collector):
                         erc20_count += 1
                         yield event
 
-                    # Update last checked block and persist to storage with component ID
+                    # Update last checked block in memory
                     self.last_checked_block = to_block
-                    self.state_store.set_last_processed_block(block_key, to_block)
 
-                    # Store collection statistics
-                    stats = {
-                        "last_processed_time": datetime.now().isoformat(),
-                        "last_processed_block": to_block,
-                        "events_collected": erc20_count,
-                        "erc20_events": erc20_count,
-                    }
-                    self.state_store.store_collector_stats(
-                        f"{self.__component_name__}:{self.chain_id}", stats
+                    # 记录统计信息，但不再存储到持久化存储
+                    logger.info(
+                        f"Processed blocks {from_block}-{to_block}, found {erc20_count} ERC20 events"
                     )
-
-                    # Create a checkpoint every 1000 blocks
-                    if to_block % 1000 == 0:
-                        self.state_store.create_checkpoint(
-                            block_key, to_block, datetime.now().isoformat()
-                        )
 
                 except Exception as e:
                     logger.error(

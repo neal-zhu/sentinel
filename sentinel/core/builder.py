@@ -11,7 +11,18 @@ class SentinelBuilder:
 
     def __init__(self, config: Config):
         self.config = config
-        self.sentinel = Sentinel()
+
+        # 获取队列配置，但只使用 group_name 和 stats_interval
+        queue_config = config.get("queues", {})
+        group_name = queue_config.get("group_name", "sentinel")
+        stats_interval = queue_config.get("stats_interval", 60)
+
+        # 使用新的初始化参数创建 Sentinel 实例
+        self.sentinel = Sentinel(
+            group_name=group_name,
+            stats_interval=stats_interval,
+        )
+
         self.collectors: List[Collector] = []
         self.strategies: List[Strategy] = []
         self.executors: List[Executor] = []

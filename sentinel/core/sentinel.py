@@ -1,9 +1,6 @@
 import asyncio
-import os
 import time
 from typing import Any, AsyncIterable, Awaitable, Callable, List, Optional, Union
-
-from aiodiskqueue import Queue
 
 from ..logger import logger
 from .actions import Action
@@ -32,7 +29,6 @@ class Sentinel:
 
     def __init__(
         self,
-        queue_dir: str = "data/queues",
         group_name: str = "sentinel",
         stats_interval: int = 60,  # Log stats every minute
     ):
@@ -40,7 +36,6 @@ class Sentinel:
         Initialize Sentinel instance
 
         Args:
-            queue_dir: Directory for queue storage
             group_name: Group name for queue identification
             stats_interval: How often to log statistics (in seconds)
         """
@@ -49,20 +44,9 @@ class Sentinel:
         self.executors: List[Executor] = []
         self.running: bool = False
 
-        # Ensure queue directory exists
-        os.makedirs(queue_dir, exist_ok=True)
-
-        # Queue paths
-        self.collector_queue_path: str = os.path.join(
-            queue_dir, f"{group_name}_events.db"
-        )
-        self.executor_queue_path: str = os.path.join(
-            queue_dir, f"{group_name}_actions.db"
-        )
-
-        # Queues will be initialized in start()
-        self.collector_queue: Queue[Event] = None  # type: ignore
-        self.executor_queue: Queue[Action] = None  # type: ignore
+        # 使用内存队列而不是持久化队列
+        self.collector_queue = asyncio.Queue()
+        self.executor_queue = asyncio.Queue()
 
         self._tasks: Optional[List[asyncio.Task[Any]]] = None
 
@@ -132,9 +116,7 @@ class Sentinel:
         self.running = True
 
         try:
-            # Initialize queues
-            self.collector_queue = await Queue.create(self.collector_queue_path)
-            self.executor_queue = await Queue.create(self.executor_queue_path)
+            # 内存队列已在初始化时创建，无需额外创建
 
             # Start all collectors
             start_tasks = [collector.start() for collector in self.collectors]
@@ -367,7 +349,7 @@ class Sentinel:
                     try:
                         # Use shorter timeout to check running flag more frequently
                         with_timeout = asyncio.wait_for(
-                            asyncio.shield(self.collector_queue.get()),
+                            self.collector_queue.get(),
                             timeout=SHORT_TIMEOUT,
                         )
 
@@ -454,7 +436,7 @@ class Sentinel:
                     try:
                         # Use shorter timeout to check running flag more frequently
                         with_timeout = asyncio.wait_for(
-                            asyncio.shield(self.executor_queue.get()),
+                            self.executor_queue.get(),
                             timeout=SHORT_TIMEOUT,
                         )
 

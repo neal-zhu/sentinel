@@ -1,5 +1,3 @@
-import os
-import tempfile
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -60,20 +58,6 @@ def token_transfer_collector(ethereum_config, mock_web3, monkeypatch):
                 max_blocks_per_scan=10,
             )
             return collector
-
-
-# Mock for BlockchainStateStore.get_last_processed_block
-def mock_get_last_processed_block(self, key):
-    # For testing, extract network name and return a default value
-    if "token_transfer:ethereum" in key:
-        return 1000000
-    return None
-
-
-# Mock for BlockchainStateStore.set_last_processed_block
-def mock_set_last_processed_block(self, key, block):
-    # For testing, just log the call
-    return
 
 
 @pytest.mark.asyncio
@@ -193,69 +177,33 @@ async def test_events_generator(token_transfer_collector, mock_web3):
 
 
 @pytest.mark.asyncio
-async def test_persistent_storage():
-    """Test persistent storage of blockchain state with component name"""
-    # Create a temporary directory for the test database
-    with tempfile.TemporaryDirectory() as temp_dir:
-        db_path = os.path.join(temp_dir, "test_blockchain_state")
+async def test_initialize_last_blocks(token_transfer_collector, mock_web3):
+    """Test initialization of last processed blocks with start_block and current block"""
+    # Test with start_block set
+    token_transfer_collector.start_block = 100
+    await token_transfer_collector._initialize_last_blocks()
+    assert token_transfer_collector.last_checked_block == 100
 
-        # Mock Web3 and provider classes
-        with patch("sentinel.collectors.token_transfer.AsyncWeb3"):
-            with patch("sentinel.collectors.token_transfer.AsyncMultiNodeProvider"):
-                # First collector instance
-                collector1 = TokenTransferCollector(
-                    chain_id=1,
-                    rpc_endpoints=["https://eth.example.com"],
-                    polling_interval=1,
-                    max_blocks_per_scan=10,
-                    db_path=db_path,
-                )
+    # Test with no start_block (should use current block)
+    token_transfer_collector.start_block = 0
 
-                # Override block storage for testing
-                collector1.state_store.get_last_processed_block = MagicMock(
-                    return_value=None
-                )
-                collector1.state_store.set_last_processed_block = MagicMock()
+    # 正确模拟异步属性
+    async def mock_block_number():
+        return 200
 
-                # Set last checked block and persist it
-                collector1.last_checked_block = 1000050
-                key = f"{collector1.__component_name__}:{collector1.chain_id}"
-                collector1.state_store.set_last_processed_block(
-                    key, collector1.last_checked_block
-                )
+    # 使用 AsyncMock 的 return_value 为 coroutine
+    mock_web3.eth.block_number = mock_block_number()
 
-                # Second collector instance using same DB path
-                collector2 = TokenTransferCollector(
-                    chain_id=1,
-                    rpc_endpoints=["https://eth.example.com"],
-                    polling_interval=1,
-                    max_blocks_per_scan=10,
-                    db_path=db_path,
-                )
-
-                # Setup mock to return the previously stored block
-                collector2.state_store.get_last_processed_block = MagicMock(
-                    return_value=1000050
-                )
-
-                # Call _initialize_last_blocks which should load the stored block
-                await collector2._initialize_last_blocks()
-
-                # Verify block loaded from persistent storage
-                assert collector2.last_checked_block == 1000050
+    await token_transfer_collector._initialize_last_blocks()
+    assert token_transfer_collector.last_checked_block == 200
 
 
 @pytest.mark.asyncio
 async def test_collector_stop(token_transfer_collector):
     """Test that the collector's stop method works correctly."""
-    # Mock the state_store.close method
-    token_transfer_collector.state_store.close = MagicMock()
-
-    # Run the stop method
+    # Since there's no state store to close, this should just complete without errors
     await token_transfer_collector._stop()
-
-    # Verify that state_store.close was called
-    token_transfer_collector.state_store.close.assert_called_once()
+    # No assertions needed as stop is now a no-op
 
 
 @pytest.mark.asyncio
