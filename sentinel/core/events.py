@@ -164,3 +164,10 @@ class TokenTransferEvent(Event):
             "is_native": self.is_native,
             "has_contract_interaction": self.has_contract_interaction,
         }
+
+
+class Web3Event(Event):
+    """
+    Web3 Event
+    """
+    type: str = "web3_event"
